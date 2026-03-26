@@ -64,8 +64,9 @@ from tqdm import tqdm
 # Config
 # ---------------------------------------------------------------------------
 
-DATASET_ID = "togethercomputer/RedPajama-Data-1T-Sample"
-OUTPUT_DIR = Path("data")
+DATASET_ID = "togethercomputer/RedPajama-Data-1T"
+DATASET_DIR = Path("data")
+OUTPUT_DIR = Path("data-output")
 SHARD_SIZE = 5_000          # samples per WebDataset / MDS shard
 HF_CACHE_DIR = Path(".hf_cache")
 
@@ -90,20 +91,19 @@ def download_dataset(skip_download: bool = False):
         print("  --skip-download set, loading from cache only...")
 
     t0 = time.time()
-    ds = load_dataset(
-        DATASET_ID,
-        split="train",
-        cache_dir=str(HF_CACHE_DIR),
-        download_mode="reuse_dataset_if_exists" if skip_download else "reuse_cache_if_exists",
-    )
+    ds = load_dataset(f"{DATASET_DIR.resolve()}")
 
     print(f"  Loaded {len(ds):,} samples in {time.time()-t0:.1f}s")
     print(f"  Columns: {ds.column_names}")
-    print(f"  Sample record:")
-    sample = ds[0]
-    print(f"    text[:100] = {sample['text'][:100]!r}")
-    print(f"    meta       = {sample['meta']}")
-    return ds
+    print(f"  {ds['train']}")
+    ds_data = ds['train'][0]
+
+    print(f"  Sample record 0 info: type:{type(ds['train'][0])} ds[0].keys:{ds['train'][0].keys()}")
+    print(f"  Sample record 0 ds['train'][0].keys():{ds_data.keys()}")
+
+    print(f"  Sample record 0 len(ds['train'][0]['text']): {len(ds_data['text'])}")
+    print(f"  Sample record 0 ds['train'][0]['meta']: {ds_data['meta']}")
+    return ds['train']
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +339,9 @@ def parse_args():
         "--formats",
         nargs="+",
         choices=["parquet", "webdataset", "mds"],
-        default=["parquet", "webdataset", "mds"],
-        help="Which output formats to generate (default: all three)",
+        # default=["parquet", "webdataset", "mds"],
+        default=[],
+        help="Which output formats to generate (default: parquet)",
     )
     p.add_argument(
         "--output-dir",
