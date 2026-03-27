@@ -67,8 +67,8 @@ from tqdm import tqdm
 # Paths — match what prepare_datasets.py wrote
 # ---------------------------------------------------------------------------
 
-DATA_ROOT = Path("/workspace/llm-data-bench/data")
-RESULTS_DIR = Path("/workspace/llm-data-bench/results/raw")
+DATA_ROOT = Path("/home/user/llm-data-bench/data-output")
+RESULTS_DIR = Path("/home/user/llm-data-bench/results/raw")
 
 TEXT_PARQUET_DIR  = DATA_ROOT / "text/parquet"
 TEXT_WDS_DIR      = DATA_ROOT / "text/webdataset"
@@ -214,6 +214,7 @@ def text_forward(model: nn.Module, batch, device: torch.device) -> int:
     Returns number of samples processed.
     """
     texts = _extract_text(batch)
+    print(f"[DEBUG] len(texts):{len(texts)}")
     if not texts:
         return 0
     # simple char-level tokenisation — avoids transformers tokenizer overhead
@@ -264,8 +265,13 @@ def _extract_text(batch) -> list:
         if key in batch:
             val = batch[key]
             if isinstance(val, (list, tuple)):
+                if isinstance(val[0], bytes):
+                    print(f"[DEBUG] type(v.decode()):{type(v.decode())}")
+                else:
+                    print(f"[DEBUG] type(val[0]):{type(val[0])}")
                 return [v.decode() if isinstance(v, bytes) else str(v) for v in val]
-            if hasattr(val, "tolist"):
+            if hasattr(val, "tolist"): # val is numpy.ndarray type
+                print(f"[DEBUG] type(val):{type(val)}")
                 return [str(v) for v in val.tolist()]
     return []
 
@@ -370,22 +376,13 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
                  log_to_driver=False)
 
     parquet_dir = str(TEXT_PARQUET_DIR if dataset == "text" else IMAGE_PARQUET_DIR)
-    ds = ray.data.read_parquet(parquet_dir)
+    ds = ray.data.read_parquet(parquet_dir) # type(ds) = <class 'ray.data.dataset.Dataset'>
     ds = ds.random_shuffle()
 
-    # wrap as an iterable that yields batches
-    class RayLoader:
-        def __init__(self, ray_ds, batch_size):
-            self._ds         = ray_ds
-            self._batch_size = batch_size
-
-        def __iter__(self):
-            return self._ds.iter_batches(
-                batch_size=self._batch_size,
-                prefetch_batches=4,
-            )
-
-    return RayLoader(ds, batch_size)
+    return iter(ds.iter_batches(
+        batch_size=batch_size,
+        prefetch_batches=4,
+    ))
 
 
 LOADER_FACTORIES = {
@@ -422,6 +419,7 @@ def run_epoch(
     t_prev = time.perf_counter()
 
     with tqdm(desc=f"  Epoch {epoch}", unit="batch", leave=False) as pbar:
+        print(f"[DEBUG] type(loader):{type(loader)}")
         for batch in loader:
             t_got_batch = time.perf_counter()
             t_data_wait += t_got_batch - t_prev   # time since last batch end
