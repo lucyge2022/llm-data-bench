@@ -44,6 +44,36 @@ Requirements
 Note on streaming package:
   pip install mosaicml-streaming
   (package name on PyPI is 'mosaicml-streaming', import name is 'streaming')
+
+------------
+  Sample usage after formatting for each format:
+  [Parquet — Ray Data]  (0.52 GB)
+
+    import ray
+    ds = ray.data.read_parquet("/home/user/llm-data-bench/data-output/parquet")
+    # __id__ column already present for shuffle tracking
+
+  [WebDataset]  (1.16 GB, 5 shards)
+
+    import webdataset as wds
+    dataset = (
+        wds.WebDataset("/home/user/llm-data-bench/data-output/webdataset/shard-{000000..000004}.tar")
+        .shuffle(1000)
+        .decode()
+        .to_tuple("__key__", "txt", "json")
+    )
+    # __key__ = "shard_idx/sample_idx" — use as shuffle tracking ID
+
+  [MosaicML StreamingDataset]  (1.13 GB, 111 shards)
+
+    from streaming import StreamingDataset
+    dataset = StreamingDataset(
+        local="/home/user/llm-data-bench/data-output/mds",
+        shuffle=True,
+        shuffle_algo="py1s",
+    )
+    # __id__ column present for shuffle tracking
+
 """
 
 import argparse
@@ -190,9 +220,10 @@ def save_webdataset(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
                     _tar_add_bytes(tar, f"{key}.txt", text_bytes)
 
                     # meta + __id__ as json
+                    print(f"DEBUG: row['meta']): {row['meta']}")
                     meta = json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"]
                     meta["__id__"] = sample_idx
-                    meta_bytes = json.dumps(meta).encode("utf-8")
+                    meta_bytes = json.dumps(meta, default=str).encode("utf-8")
                     _tar_add_bytes(tar, f"{key}.json", meta_bytes)
 
                     sample_idx += 1
@@ -226,6 +257,11 @@ def save_mds(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
     Convert dataset to MosaicML StreamingDataset .mds format.
 
     Requires: pip install mosaicml-streaming
+
+    shard size is sharding size limit in bytes (in here its actually shar_size*2048 check later code)
+    
+    MDSWriter just keeps writing rows into the current shard until it hits the size_limit in bytes, 
+    then starts a new shard. Simple byte-based chunking.
     """
     out = output_dir / "mds"
     out.mkdir(parents=True, exist_ok=True)
@@ -252,7 +288,7 @@ def save_mds(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
 
     with MDSWriter(out=str(out), columns=columns, size_limit=shard_size * 2048) as writer:
         for i, row in enumerate(tqdm(ds, desc="  Writing", unit="samples")):
-            meta = row["meta"] if isinstance(row["meta"], str) else json.dumps(row["meta"])
+            meta = row["meta"] if isinstance(row["meta"], str) else json.dumps(row["meta"], default=str)
             writer.write({
                 "__id__": i,
                 "text": row["text"],
