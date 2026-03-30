@@ -87,17 +87,37 @@ class GPUPoller:
     Polls GPU utilisation and memory every 500ms in a background thread.
     Call .start() before the training loop, .stop() after.
     .summary() returns mean util% and peak mem GB.
+    Optionally pushes live readings to a Prometheus Pushgateway.
     """
 
-    def __init__(self, device_idx: int = 0, interval: float = 0.5):
-        self.device_idx = device_idx
-        self.interval   = interval
+    def __init__(self, device_idx: int = 0, interval: float = 0.5,
+                 pushgateway: Optional[str] = None, job_labels: Optional[Dict] = None):
+        self.device_idx  = device_idx
+        self.interval    = interval
+        self._pushgateway = pushgateway
+        self._job_labels  = job_labels or {}
+        print(f"[DEBUG] job_labels:{job_labels}")
         self._utils: list = []
         self._mems:  list = []
         self._stop   = threading.Event()
         self._thread = threading.Thread(target=self._poll, daemon=True)
         self._nvml_ok = False
+        self._prom_ok = False
         self._init_nvml()
+        self._init_prom()
+
+    def _init_prom(self):
+        if not self._pushgateway:
+            return
+        try:
+            from prometheus_client import CollectorRegistry, Gauge
+            self._prom_registry = CollectorRegistry()
+            label_names = list(self._job_labels.keys())
+            self._g_util = Gauge("gpu_util_pct",  "GPU utilisation %",  label_names, registry=self._prom_registry)
+            self._g_mem  = Gauge("gpu_mem_gb",    "GPU memory used GB", label_names, registry=self._prom_registry)
+            self._prom_ok = True
+        except ImportError:
+            pass
 
     def _init_nvml(self):
         try:
@@ -113,10 +133,24 @@ class GPUPoller:
     def _poll(self):
         while not self._stop.is_set():
             util, mem = self._query()
+            print(f"[DEBUG] util:{util} mem:{mem}")
             if util is not None:
                 self._utils.append(util)
                 self._mems.append(mem)
+                self._push(util, mem)
             time.sleep(self.interval)
+
+    def _push(self, util: float, mem: float):
+        if not self._prom_ok:
+            return
+        try:
+            from prometheus_client import push_to_gateway
+            label_values = list(self._job_labels.values())
+            self._g_util.labels(*label_values).set(util)
+            self._g_mem.labels(*label_values).set(mem)
+            push_to_gateway(self._pushgateway, job="llm_data_bench", registry=self._prom_registry)
+        except Exception:
+            pass
 
     def _query(self):
         if self._nvml_ok:
@@ -459,13 +493,14 @@ def run_epoch(
 # ---------------------------------------------------------------------------
 
 def run_benchmark(
-    loader_name: str,
-    dataset:     str,
-    batch_size:  int,
-    num_workers: int,
-    epochs:      int,
-    max_batches: Optional[int],
-    output_dir:  Path,
+    loader_name:  str,
+    dataset:      str,
+    batch_size:   int,
+    num_workers:  int,
+    epochs:       int,
+    max_batches:  Optional[int],
+    output_dir:   Path,
+    pushgateway:  Optional[str] = None,
 ) -> list:
 
     sep = "─" * 60
@@ -486,7 +521,11 @@ def run_benchmark(
     print(f"  Building {loader_name} loader...")
     loader = LOADER_FACTORIES[loader_name](dataset, batch_size, num_workers)
 
-    poller = GPUPoller(device_idx=0)
+    poller = GPUPoller(
+        device_idx=0,
+        pushgateway=pushgateway,
+        job_labels={"loader": loader_name, "dataset": dataset, "batch_size": str(batch_size)},
+    )
 
     all_results = []
 
@@ -534,9 +573,28 @@ def run_benchmark(
                  f"_bs{batch_size}_w{num_workers}"
                  f"_epoch{epoch}.json")
         fname.write_text(json.dumps(metrics, indent=2))
+        # _push_metrics(metrics)
         print(f"  Saved → {fname.name}")
 
     return all_results
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+def _push_metrics(metrics: dict, pushgateway: str = "localhost:9091"):
+    from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
+    registry = CollectorRegistry()
+    labels = {
+        "loader":     metrics["loader"],
+        "dataset":    metrics["dataset"],
+        "batch_size": str(metrics["batch_size"]),
+        "epoch":      str(metrics["epoch"]),
+    }
+    for key in ("samples_per_sec", "gpu_util_pct", "gpu_mem_gb", "data_stall_pct", "elapsed_sec"):
+        g = Gauge(f"bench_{key}", key, labelnames=list(labels), registry=registry)
+        g.labels(**labels).set(metrics[key])
+    push_to_gateway(pushgateway, job="llm_data_bench", registry=registry)
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +613,13 @@ def parse_args():
                    help="Dataset to use")
     p.add_argument("--batch-size",  type=int, default=64)
     p.add_argument("--num-workers", type=int, default=4)
+    '''
+    num-workers
+    Loader	    What num_workers controls:
+    WebDataset	PyTorch DataLoader worker processes:
+    Streaming	PyTorch DataLoader worker processes:
+    Ray	        CPU budget for Ray's internal execution pool:
+    '''
     p.add_argument("--epochs",      type=int, default=3)
     p.add_argument("--max-batches", type=int, default=None,
                    help="Cap batches per epoch (for smoke testing)")
@@ -563,6 +628,8 @@ def parse_args():
                    help="Run full matrix: all loaders x all datasets")
     p.add_argument("--smoke-test",  action="store_true",
                    help="Quick run: 20 batches, 1 epoch, webdataset+text only")
+    p.add_argument("--pushgateway", type=str, default=None,
+                   help="Prometheus Pushgateway address e.g. localhost:9091")
     return p.parse_args()
 
 
@@ -579,6 +646,7 @@ def main():
             epochs=1,
             max_batches=20,
             output_dir=args.output_dir,
+            pushgateway=args.pushgateway,
         )
         return
 
@@ -598,6 +666,7 @@ def main():
                         epochs=args.epochs,
                         max_batches=args.max_batches,
                         output_dir=args.output_dir,
+                        pushgateway=args.pushgateway,
                     )
         return
 
@@ -614,6 +683,7 @@ def main():
         epochs=args.epochs,
         max_batches=args.max_batches,
         output_dir=args.output_dir,
+        pushgateway=args.pushgateway,
     )
 
 
