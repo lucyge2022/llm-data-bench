@@ -379,10 +379,10 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
     ds = ray.data.read_parquet(parquet_dir) # type(ds) = <class 'ray.data.dataset.Dataset'>
     ds = ds.random_shuffle()
 
-    return iter(ds.iter_batches(
+    return ds.iter_batches(
         batch_size=batch_size,
         prefetch_batches=4,
-    ))
+    )
 
 
 LOADER_FACTORIES = {
