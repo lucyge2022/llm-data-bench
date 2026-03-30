@@ -96,7 +96,6 @@ class GPUPoller:
         self.interval    = interval
         self._pushgateway = pushgateway
         self._job_labels  = job_labels or {}
-        print(f"[DEBUG] job_labels:{job_labels}")
         self._utils: list = []
         self._mems:  list = []
         self._stop   = threading.Event()
@@ -133,7 +132,6 @@ class GPUPoller:
     def _poll(self):
         while not self._stop.is_set():
             util, mem = self._query()
-            print(f"[DEBUG] util:{util} mem:{mem}")
             if util is not None:
                 self._utils.append(util)
                 self._mems.append(mem)
@@ -142,6 +140,7 @@ class GPUPoller:
 
     def _push(self, util: float, mem: float):
         if not self._prom_ok:
+            print(f"[ERROR] not self._prom_ok, not pushing metrics...")
             return
         try:
             from prometheus_client import push_to_gateway
@@ -149,7 +148,8 @@ class GPUPoller:
             self._g_util.labels(*label_values).set(util)
             self._g_mem.labels(*label_values).set(mem)
             push_to_gateway(self._pushgateway, job="llm_data_bench", registry=self._prom_registry)
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR] Exception in _push:{e}")
             pass
 
     def _query(self):
@@ -248,7 +248,6 @@ def text_forward(model: nn.Module, batch, device: torch.device) -> int:
     Returns number of samples processed.
     """
     texts = _extract_text(batch)
-    print(f"[DEBUG] len(texts):{len(texts)}")
     if not texts:
         return 0
     # simple char-level tokenisation — avoids transformers tokenizer overhead
@@ -299,13 +298,13 @@ def _extract_text(batch) -> list:
         if key in batch:
             val = batch[key]
             if isinstance(val, (list, tuple)):
-                if isinstance(val[0], bytes):
-                    print(f"[DEBUG] type(v.decode()):{type(v.decode())}")
-                else:
-                    print(f"[DEBUG] type(val[0]):{type(val[0])}")
+                # if isinstance(val[0], bytes):
+                #     print(f"[DEBUG] type(v.decode()):{type(v.decode())}")
+                # else:
+                #     print(f"[DEBUG] type(val[0]):{type(val[0])}")
                 return [v.decode() if isinstance(v, bytes) else str(v) for v in val]
             if hasattr(val, "tolist"): # val is numpy.ndarray type
-                print(f"[DEBUG] type(val):{type(val)}")
+                # print(f"[DEBUG] type(val):{type(val)}")
                 return [str(v) for v in val.tolist()]
     return []
 
@@ -628,7 +627,7 @@ def parse_args():
                    help="Run full matrix: all loaders x all datasets")
     p.add_argument("--smoke-test",  action="store_true",
                    help="Quick run: 20 batches, 1 epoch, webdataset+text only")
-    p.add_argument("--pushgateway", type=str, default=None,
+    p.add_argument("--pushgateway", type=str, default="localhost:9091",
                    help="Prometheus Pushgateway address e.g. localhost:9091")
     return p.parse_args()
 
