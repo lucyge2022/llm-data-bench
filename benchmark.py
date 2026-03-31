@@ -260,16 +260,17 @@ def text_forward(model: nn.Module, batch, device: torch.device) -> int:
     Tokenise text batch and run GPT-2 forward.
     Returns number of samples processed.
     """
-    texts = _extract_text(batch)
+    texts = _extract_text(batch) # texts [=] a list of text strings
     if not texts:
         return 0
     # simple char-level tokenisation — avoids transformers tokenizer overhead
     # (we want to stress the DATA LOADER, not the tokenizer)
     max_len = 128
-    ids = torch.zeros(len(texts), max_len, dtype=torch.long, device=device)
+    ids = torch.zeros(len(texts), max_len, dtype=torch.long, device=device) # ids [=] a tensor of shape (len(texts), max_len) if device is cude, then this tensor already on the GPU VRAM
+    print(f"[DEBUG] ids shape:{ids.shape}, ids residence device:{ids.device}")
     for i, t in enumerate(texts):
-        chars = [ord(c) % 50257 for c in t[:max_len]]
-        ids[i, :len(chars)] = torch.tensor(chars, dtype=torch.long)
+        chars = [ord(c) % 50257 for c in t[:max_len]] # we simply map each character to a number between 0 and 50257, in actuality, we should use a more sophisticated tokenizer
+        ids[i, :len(chars)] = torch.tensor(chars, dtype=torch.long) # this is thru H2D copy (host to device) AKA cpu RAM to gpu VRAM copy thru PCIe
     try:
         model(ids)
     except Exception:
