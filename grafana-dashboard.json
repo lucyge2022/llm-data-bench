@@ -1,0 +1,106 @@
+{
+  "title": "LLM Data Bench",
+  "uid": "llm-data-bench",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "GPU Utilisation % by Loader",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "bench_gpu_util_pct",
+          "legendFormat": "{{loader}} / {{dataset}} / bs={{batch_size}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "GPU Memory Used (GB) by Loader",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "bench_gpu_mem_gb",
+          "legendFormat": "{{loader}} / {{dataset}} / bs={{batch_size}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "min": 0,
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "GPU Utilisation % (current)",
+      "type": "gauge",
+      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 6 },
+      "targets": [
+        {
+          "expr": "bench_gpu_util_pct",
+          "legendFormat": "{{loader}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "green",  "value": 80 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "GPU Memory Used (current)",
+      "type": "gauge",
+      "gridPos": { "x": 6, "y": 8, "w": 6, "h": 6 },
+      "targets": [
+        {
+          "expr": "bench_gpu_mem_gb",
+          "legendFormat": "{{loader}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 16 },
+              { "color": "red",    "value": 20 }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "schemaVersion": 38
+}

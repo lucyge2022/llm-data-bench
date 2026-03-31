@@ -152,6 +152,19 @@ class GPUPoller:
             print(f"[ERROR] Exception in _push:{e}")
             pass
 
+    def __del__(self):
+        if getattr(self, "_prom_ok", False):
+            try:
+                from prometheus_client import push_to_gateway
+                import math
+                label_values = list(self._job_labels.values())
+                self._g_util.labels(*label_values).set(math.nan)
+                self._g_mem.labels(*label_values).set(math.nan)
+                push_to_gateway(self._pushgateway, job="llm_data_bench", registry=self._prom_registry)
+                print(f"[DEBUG] __del__: pushed nan to pushgateway")
+            except Exception:
+                pass
+
     def _query(self):
         if self._nvml_ok:
             try:
