@@ -1,3 +1,5 @@
+# For Docker Compose use only (mounted into the Prometheus container).
+# If running natively, edit /etc/prometheus/prometheus.yml instead.
 global:
   scrape_interval: 5s
   evaluation_interval: 5s

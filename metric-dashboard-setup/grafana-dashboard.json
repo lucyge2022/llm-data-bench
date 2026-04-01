@@ -108,6 +108,7 @@
         {
           "editorMode": "code",
           "expr": "gpu_util_pct",
+          "interval": "1",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -204,6 +205,7 @@
         {
           "editorMode": "code",
           "expr": "gpu_mem_gb",
+          "interval": "1",
           "legendFormat": "{{loader}} / {{dataset}} / bs={{batch_size}}",
           "range": true,
           "refId": "A"
@@ -340,13 +342,13 @@
     "list": []
   },
   "time": {
-    "from": "now-5m",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "LLM Data Bench",
   "uid": "llm-data-bench",
-  "version": 7,
+  "version": 9,
   "weekStart": ""
 }
