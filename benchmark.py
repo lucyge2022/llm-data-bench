@@ -84,20 +84,26 @@ IMAGE_MDS_DIR     = DATA_ROOT / "images/mds"
 
 class GPUPoller:
     """
-    Polls GPU utilisation and memory every 500ms in a background thread.
+    Polls GPU utilisation, GPU memory, CPU utilisation and RAM every interval
+    seconds in a background thread.
     Call .start() before the training loop, .stop() after.
-    .summary() returns mean util% and peak mem GB.
+    .summary() returns mean/peak stats for all four metrics.
     Optionally pushes live readings to a Prometheus Pushgateway.
     """
 
     def __init__(self, device_idx: int = 0, interval: float = 1.0,
                  pushgateway: Optional[str] = None, job_labels: Optional[Dict] = None):
-        self.device_idx  = device_idx
-        self.interval    = interval
+        self.device_idx   = device_idx
+        self.interval     = interval
         self._pushgateway = pushgateway
         self._job_labels  = job_labels or {}
-        self._utils: list = []
-        self._mems:  list = []
+        self._gpu_utils:     list = []
+        self._gpu_mems:      list = []
+        self._cpu_utils: list = []
+        self._ram_used:  list = []
+
+        import psutil
+        self._proc = psutil.Process(os.getpid())
         self._stop   = threading.Event()
         self._thread = threading.Thread(target=self._poll, daemon=True)
         self._nvml_ok = False
@@ -112,8 +118,10 @@ class GPUPoller:
             from prometheus_client import CollectorRegistry, Gauge
             self._prom_registry = CollectorRegistry()
             label_names = list(self._job_labels.keys())
-            self._g_util = Gauge("gpu_util_pct",  "GPU utilisation %",  label_names, registry=self._prom_registry)
-            self._g_mem  = Gauge("gpu_mem_gb",    "GPU memory used GB", label_names, registry=self._prom_registry)
+            self._g_util     = Gauge("gpu_util_pct",  "GPU utilisation %",    label_names, registry=self._prom_registry)
+            self._g_mem      = Gauge("gpu_mem_gb",    "GPU memory used GB",   label_names, registry=self._prom_registry)
+            self._g_cpu_util = Gauge("cpu_util_pct",  "CPU utilisation %",    label_names, registry=self._prom_registry)
+            self._g_ram_used = Gauge("ram_used_gb",   "RAM used GB",          label_names, registry=self._prom_registry)
             self._prom_ok = True
         except ImportError:
             pass
@@ -131,22 +139,30 @@ class GPUPoller:
 
     def _poll(self):
         while not self._stop.is_set():
-            util, mem = self._query()
-            if util is not None:
-                self._utils.append(util)
-                self._mems.append(mem)
-                self._push(util, mem)
+            gpu_util, gpu_mem = self._query()
+            cpu_util = self._proc.cpu_percent(interval=None)
+            ram_used = self._proc.memory_info().rss / 1e9
+            if gpu_util is not None:
+                self._gpu_utils.append(gpu_util)
+                self._gpu_mems.append(gpu_mem)
+            self._cpu_utils.append(cpu_util)
+            self._ram_used.append(ram_used)
+            self._push(gpu_util, gpu_mem, cpu_util, ram_used)
             time.sleep(self.interval)
 
-    def _push(self, util: float, mem: float):
+    def _push(self, gpu_util: Optional[float], gpu_mem: Optional[float],
+              cpu_util: float, ram_used: float):
         if not self._prom_ok:
-            print(f"[ERROR] not self._prom_ok, not pushing metrics...")
+            print(f"[ERROR] Prometheus not initialized")
             return
         try:
             from prometheus_client import push_to_gateway
+            import math
             label_values = list(self._job_labels.values())
-            self._g_util.labels(*label_values).set(util)
-            self._g_mem.labels(*label_values).set(mem)
+            self._g_util.labels(*label_values).set(gpu_util if gpu_util is not None else math.nan)
+            self._g_mem.labels(*label_values).set(gpu_mem if gpu_mem is not None else math.nan)
+            self._g_cpu_util.labels(*label_values).set(cpu_util)
+            self._g_ram_used.labels(*label_values).set(ram_used)
             push_to_gateway(self._pushgateway, job="llm_data_bench", registry=self._prom_registry)
         except Exception as e:
             print(f"[ERROR] Exception in _push:{e}")
@@ -160,8 +176,9 @@ class GPUPoller:
                 label_values = list(self._job_labels.values())
                 self._g_util.labels(*label_values).set(math.nan)
                 self._g_mem.labels(*label_values).set(math.nan)
+                self._g_cpu_util.labels(*label_values).set(math.nan)
+                self._g_ram_used.labels(*label_values).set(math.nan)
                 push_to_gateway(self._pushgateway, job="llm_data_bench", registry=self._prom_registry)
-                print(f"[DEBUG] __del__: pushed nan to pushgateway")
             except Exception:
                 pass
 
@@ -189,8 +206,10 @@ class GPUPoller:
             return None, None
 
     def start(self):
-        self._utils.clear()
-        self._mems.clear()
+        self._gpu_utils.clear()
+        self._gpu_mems.clear()
+        self._cpu_utils.clear()
+        self._ram_used.clear()
         self._stop.clear()
         self._thread = threading.Thread(target=self._poll, daemon=True)
         self._thread.start()
@@ -201,14 +220,20 @@ class GPUPoller:
         self._thread.join(timeout=2)
 
     def summary(self) -> Dict[str, float]:
-        if not self._utils:
-            return {"gpu_util_pct": 0.0, "gpu_mem_gb": 0.0, "gpu_util_min": 0.0}
         import statistics
-        return {
-            "gpu_util_pct": round(statistics.mean(self._utils), 2),
-            "gpu_util_min": round(min(self._utils), 2),
-            "gpu_mem_gb":   round(max(self._mems), 3),
+        result = {
+            "gpu_util_pct": 0.0, "gpu_mem_gb": 0.0, "gpu_util_min": 0.0,
+            "cpu_util_pct": 0.0, "ram_used_gb": 0.0,
         }
+        if self._gpu_utils:
+            result["gpu_util_pct"] = round(statistics.mean(self._gpu_utils), 2)
+            result["gpu_util_min"] = round(min(self._gpu_utils), 2)
+            result["gpu_mem_gb"]   = round(max(self._gpu_mems), 3)
+        if self._cpu_utils:
+            result["cpu_util_pct"] = round(statistics.mean(self._cpu_utils), 2)
+        if self._ram_used:
+            result["ram_used_gb"]  = round(max(self._ram_used), 3)
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +601,8 @@ def run_benchmark(
         print(f"  GPU util     : {metrics['gpu_util_pct']:.1f}%  "
               f"(min {metrics['gpu_util_min']:.1f}%)")
         print(f"  GPU mem      : {metrics['gpu_mem_gb']:.2f} GB")
+        print(f"  CPU util     : {metrics['cpu_util_pct']:.1f}%")
+        print(f"  RAM used     : {metrics['ram_used_gb']:.2f} GB")
         print(f"  Data stall   : {metrics['data_stall_pct']:.1f}%")
         print(f"  Elapsed      : {metrics['elapsed_sec']:.1f}s  "
               f"({metrics['total_samples']:,} samples)")
