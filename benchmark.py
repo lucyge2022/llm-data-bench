@@ -90,7 +90,7 @@ class GPUPoller:
     Optionally pushes live readings to a Prometheus Pushgateway.
     """
 
-    def __init__(self, device_idx: int = 0, interval: float = 0.5,
+    def __init__(self, device_idx: int = 0, interval: float = 1.0,
                  pushgateway: Optional[str] = None, job_labels: Optional[Dict] = None):
         self.device_idx  = device_idx
         self.interval    = interval
@@ -536,6 +536,7 @@ def run_benchmark(
 
     poller = GPUPoller(
         device_idx=0,
+        interval=1.0,
         pushgateway=pushgateway,
         job_labels={"loader": loader_name, "dataset": dataset, "batch_size": str(batch_size)},
     )
@@ -586,29 +587,9 @@ def run_benchmark(
                  f"_bs{batch_size}_w{num_workers}"
                  f"_epoch{epoch}.json")
         fname.write_text(json.dumps(metrics, indent=2))
-        # _push_metrics(metrics)
         print(f"  Saved → {fname.name}")
 
     return all_results
-
-# ---------------------------------------------------------------------------
-# Prometheus metrics
-# ---------------------------------------------------------------------------
-
-def _push_metrics(metrics: dict, pushgateway: str = "localhost:9091"):
-    from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
-    registry = CollectorRegistry()
-    labels = {
-        "loader":     metrics["loader"],
-        "dataset":    metrics["dataset"],
-        "batch_size": str(metrics["batch_size"]),
-        "epoch":      str(metrics["epoch"]),
-    }
-    for key in ("samples_per_sec", "gpu_util_pct", "gpu_mem_gb", "data_stall_pct", "elapsed_sec"):
-        g = Gauge(f"bench_{key}", key, labelnames=list(labels), registry=registry)
-        g.labels(**labels).set(metrics[key])
-    push_to_gateway(pushgateway, job="llm_data_bench", registry=registry)
-
 
 # ---------------------------------------------------------------------------
 # CLI
