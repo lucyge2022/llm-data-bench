@@ -476,6 +476,7 @@ def run_epoch(
     epoch:       int,
     max_batches: Optional[int],
     poller:      GPUPoller,
+    profile_dir: Optional[Path] = None,
 ) -> Dict:
     """Run one epoch, return metrics dict."""
 
@@ -490,23 +491,50 @@ def run_epoch(
 
     t_prev = time.perf_counter()
 
-    with tqdm(desc=f"  Epoch {epoch}", unit="batch", leave=False) as pbar:
-        print(f"[DEBUG] type(loader):{type(loader)}")
-        for batch in loader:
-            t_got_batch = time.perf_counter()
-            t_data_wait += t_got_batch - t_prev   # time since last batch end
+    def _run_loop(prof=None):
+        nonlocal total_samples, total_batches, t_data_wait, t_prev
+        with tqdm(desc=f"  Epoch {epoch}", unit="batch", leave=False) as pbar:
+            for batch in loader:
+                t_got_batch = time.perf_counter()
+                t_data_wait += t_got_batch - t_prev
 
-            n = forward_fn(model, batch, device)
-            total_samples += n
-            total_batches += 1
+                n = forward_fn(model, batch, device)
+                total_samples += n
+                total_batches += 1
 
-            t_prev = time.perf_counter()
-            pbar.update(1)
-            pbar.set_postfix(samples=total_samples,
-                             sps=f"{total_samples/(t_prev-t_epoch_start):.0f}")
+                t_prev = time.perf_counter()
+                pbar.update(1)
+                pbar.set_postfix(samples=total_samples,
+                                 sps=f"{total_samples/(t_prev-t_epoch_start):.0f}")
 
-            if max_batches and total_batches >= max_batches:
-                break
+                if prof:
+                    prof.step()
+
+                if max_batches and total_batches >= max_batches:
+                    break
+
+    if profile_dir is not None:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = profile_dir / f"epoch{epoch}.json"
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+            with_stack=False,   # stack traces balloon file size significantly
+            schedule=torch.profiler.schedule(
+                wait=2,         # skip first 2 batches (warmup noise)
+                warmup=1,       # 1 warmup batch (traced but discarded)
+                active=5,       # capture only 5 batches
+                repeat=1,
+            ),
+        ) as prof:
+            _run_loop(prof)
+        prof.export_chrome_trace(str(trace_path))
+        print(f"  Profiler trace → {trace_path}  (open in chrome://tracing)")
+    else:
+        _run_loop()
 
     t_elapsed = time.perf_counter() - t_epoch_start
     poller.stop()
@@ -539,6 +567,7 @@ def run_benchmark(
     max_batches:  Optional[int],
     output_dir:   Path,
     pushgateway:  Optional[str] = None,
+    profile:      bool = False,
 ) -> list:
 
     sep = "─" * 60
@@ -575,6 +604,8 @@ def run_benchmark(
         if epoch > 0:
             loader = LOADER_FACTORIES[loader_name](dataset, batch_size, num_workers)
 
+        profile_dir = (output_dir / "profiles" /
+                       f"{loader_name}_{dataset}_bs{batch_size}") if profile else None
         metrics = run_epoch(
             loader=loader,
             model=model,
@@ -583,6 +614,7 @@ def run_benchmark(
             epoch=epoch,
             max_batches=max_batches,
             poller=poller,
+            profile_dir=profile_dir,
         )
 
         metrics.update({
@@ -651,6 +683,8 @@ def parse_args():
                    help="Quick run: 20 batches, 1 epoch, webdataset+text only")
     p.add_argument("--pushgateway", type=str, default="localhost:9091",
                    help="Prometheus Pushgateway address e.g. localhost:9091")
+    p.add_argument("--profile", action="store_true",
+                   help="Enable torch.profiler — writes Chrome trace JSON per epoch to output_dir/profiles/")
     return p.parse_args()
 
 
@@ -668,6 +702,7 @@ def main():
             max_batches=20,
             output_dir=args.output_dir,
             pushgateway=args.pushgateway,
+            profile=args.profile,
         )
         return
 
@@ -688,6 +723,7 @@ def main():
                         max_batches=args.max_batches,
                         output_dir=args.output_dir,
                         pushgateway=args.pushgateway,
+                        profile=args.profile,
                     )
         return
 
@@ -705,6 +741,7 @@ def main():
         max_batches=args.max_batches,
         output_dir=args.output_dir,
         pushgateway=args.pushgateway,
+        profile=args.profile,
     )
 
 
