@@ -708,7 +708,7 @@ def main():
 
     if args.all:
         loaders  = ["webdataset", "streaming", "ray"]
-        datasets = ["text", "images"]
+        datasets = ["text"] #, "images"]
         print(f"FULL MATRIX: {len(loaders)} loaders x {len(datasets)} datasets "
               f"x {args.epochs} epochs x 3 batch sizes")
         for loader in loaders:

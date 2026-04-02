@@ -98,14 +98,13 @@ DATASET_ID = "togethercomputer/RedPajama-Data-1T"
 DATASET_DIR = Path("data")
 OUTPUT_DIR = Path("data-output")
 SHARD_SIZE = 5_000          # samples per WebDataset / MDS shard
-HF_CACHE_DIR = Path(".hf_cache")
 
 
 # ---------------------------------------------------------------------------
 # Step 1 — Download from HuggingFace
 # ---------------------------------------------------------------------------
 
-def download_dataset(skip_download: bool = False):
+def download_dataset():
     """
     Load the dataset from HuggingFace (uses local cache if already downloaded).
     Returns a HuggingFace Dataset object.
@@ -114,11 +113,7 @@ def download_dataset(skip_download: bool = False):
 
     print(f"\n{'='*60}")
     print(f"  Step 1: Loading {DATASET_ID}")
-    print(f"  Cache dir: {HF_CACHE_DIR.resolve()}")
     print(f"{'='*60}")
-
-    if skip_download:
-        print("  --skip-download set, loading from cache only...")
 
     t0 = time.time()
     ds = load_dataset(f"{DATASET_DIR.resolve()}")
@@ -140,12 +135,12 @@ def download_dataset(skip_download: bool = False):
 # Step 2 — Save as local Parquet
 # ---------------------------------------------------------------------------
 
-def save_parquet(ds, output_dir: Path, shard_size: int = 50_000):
+def save_parquet(ds, output_dir: Path, modality: str = "text", shard_size: int = 50_000):
     """
     Save the dataset as local Parquet shards.
     Ray Data reads Parquet natively — just point it at this directory.
     """
-    out = output_dir / "parquet"
+    out = output_dir / modality / "parquet"
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*60}")
@@ -179,7 +174,7 @@ def save_parquet(ds, output_dir: Path, shard_size: int = 50_000):
 # Step 3 — Convert to WebDataset .tar shards
 # ---------------------------------------------------------------------------
 
-def save_webdataset(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
+def save_webdataset(ds, output_dir: Path, modality: str = "text", shard_size: int = SHARD_SIZE):
     """
     Convert dataset to WebDataset .tar shards.
 
@@ -192,7 +187,7 @@ def save_webdataset(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
       batch["txt"]      → text bytes
       batch["json"]     → meta bytes
     """
-    out = output_dir / "webdataset"
+    out = output_dir / modality / "webdataset"
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*60}")
@@ -220,7 +215,6 @@ def save_webdataset(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
                     _tar_add_bytes(tar, f"{key}.txt", text_bytes)
 
                     # meta + __id__ as json
-                    print(f"DEBUG: row['meta']): {row['meta']}")
                     meta = json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"]
                     meta["__id__"] = sample_idx
                     meta_bytes = json.dumps(meta, default=str).encode("utf-8")
@@ -252,7 +246,7 @@ def _tar_add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 # Step 4 — Convert to MosaicML StreamingDataset .mds shards
 # ---------------------------------------------------------------------------
 
-def save_mds(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
+def save_mds(ds, output_dir: Path, modality: str = "text", shard_size: int = SHARD_SIZE):
     """
     Convert dataset to MosaicML StreamingDataset .mds format.
 
@@ -263,7 +257,7 @@ def save_mds(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
     MDSWriter just keeps writing rows into the current shard until it hits the size_limit in bytes, 
     then starts a new shard. Simple byte-based chunking.
     """
-    out = output_dir / "mds"
+    out = output_dir / modality / "mds"
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*60}")
@@ -283,7 +277,6 @@ def save_mds(ds, output_dir: Path, shard_size: int = SHARD_SIZE):
         "__id__": "int",
         "text": "str",
         "meta": "str",
-        "red_pajama_subset": "str",
     }
 
     with MDSWriter(out=str(out), columns=columns, size_limit=shard_size * 2048) as writer:
@@ -364,20 +357,14 @@ def _dir_size_gb(path: Path) -> float:
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Download and prepare RedPajama-1T-Sample for benchmarking"
-    )
-    p.add_argument(
-        "--skip-download",
-        action="store_true",
-        help="Skip HuggingFace download, use cached version",
+        description="Download and prepare RedPajama-1T for benchmarking"
     )
     p.add_argument(
         "--formats",
         nargs="+",
         choices=["parquet", "webdataset", "mds"],
-        # default=["parquet", "webdataset", "mds"],
-        default=[],
-        help="Which output formats to generate (default: parquet)",
+        default=["parquet", "webdataset", "mds"],
+        help="Which output formats to generate (default: parquet, webdataset, mds)",
     )
     p.add_argument(
         "--output-dir",
@@ -386,17 +373,16 @@ def parse_args():
         help=f"Output directory (default: {OUTPUT_DIR})",
     )
     p.add_argument(
+        "--modality",
+        type=str,
+        default="text",
+        help=f"Modality 'text' or 'images' (default: text)",
+    )
+    p.add_argument(
         "--shard-size",
         type=int,
         default=SHARD_SIZE,
         help=f"Samples per shard for WebDataset and MDS (default: {SHARD_SIZE})",
-    )
-    p.add_argument(
-        "--subset",
-        type=str,
-        default=None,
-        choices=["common_crawl", "c4", "github", "arxiv", "wikipedia", "stackexchange"],
-        help="Only keep samples from one RedPajama subset (default: all)",
     )
     return p.parse_args()
 
@@ -408,30 +394,20 @@ def main():
     print(f"\nllm-data-pipeline-bench — dataset preparation")
     print(f"Output dir : {args.output_dir.resolve()}")
     print(f"Formats    : {args.formats}")
-    if args.subset:
-        print(f"Subset     : {args.subset}")
+    print(f"Modality   : {args.modality}")
 
-    # 1. Download
-    ds = download_dataset(skip_download=args.skip_download)
+    # 1. Load downloaded dataset
+    ds = download_dataset()
 
-    # 2. Optional subset filter
-    if args.subset:
-        before = len(ds)
-        ds = ds.filter(
-            lambda x: x["red_pajama_subset"] == args.subset,
-            desc=f"Filtering to {args.subset}",
-        )
-        print(f"  Filtered: {before:,} → {len(ds):,} samples")
-
-    # 3. Convert to requested formats
+    # 2. Convert to requested formats
     if "parquet" in args.formats:
-        save_parquet(ds, args.output_dir)
+        save_parquet(ds, args.output_dir, modality=args.modality)
 
     if "webdataset" in args.formats:
-        save_webdataset(ds, args.output_dir, shard_size=args.shard_size)
+        save_webdataset(ds, args.output_dir, modality=args.modality, shard_size=args.shard_size)
 
     if "mds" in args.formats:
-        save_mds(ds, args.output_dir, shard_size=args.shard_size)
+        save_mds(ds, args.output_dir, modality=args.modality, shard_size=args.shard_size)
 
     # 4. Summary
     print_usage_summary(args.output_dir)
