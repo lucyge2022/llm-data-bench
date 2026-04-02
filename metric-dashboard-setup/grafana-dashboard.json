@@ -21,6 +21,10 @@
   "links": [],
   "panels": [
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "afhm74zi9a03kd"
+      },
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -60,7 +64,7 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "mean"
           ],
           "fields": "",
           "values": false
@@ -72,15 +76,21 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "gpu_util_pct",
-          "legendFormat": "{{loader}}",
+          "legendFormat": "{{loader}}/bs={{batch_size}}",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "GPU Utilisation % (current)",
+      "title": "GPU Utilisation % (Avg)",
       "type": "gauge"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "afhm74zi9a03kd"
+      },
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -119,7 +129,7 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "mean"
           ],
           "fields": "",
           "values": false
@@ -131,12 +141,14 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "gpu_mem_gb",
-          "legendFormat": "{{loader}}",
+          "legendFormat": "{{loader}}/bs={{batch_size}}",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "GPU Memory Used (current)",
+      "title": "GPU Memory Used (Avg)",
       "type": "gauge"
     },
     {
@@ -228,7 +240,7 @@
           "editorMode": "code",
           "expr": "gpu_util_pct",
           "interval": "1",
-          "legendFormat": "__auto",
+          "legendFormat": "{{loader}} / {{dataset}} / bs={{batch_size}}",
           "range": true,
           "refId": "A"
         }
@@ -309,7 +321,7 @@
       "options": {
         "legend": {
           "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -406,7 +418,7 @@
       "options": {
         "legend": {
           "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -419,8 +431,11 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "cpu_util_pct",
+          "interval": "1",
           "legendFormat": "{{loader}} / {{dataset}} / bs={{batch_size}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -428,6 +443,10 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "afhm74zi9a03kd"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -496,7 +515,7 @@
       "options": {
         "legend": {
           "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -509,8 +528,11 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "ram_used_gb",
+          "interval": "1",
           "legendFormat": "{{loader}} / {{dataset}} / bs={{batch_size}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -526,13 +548,13 @@
     "list": []
   },
   "time": {
-    "from": "now-15m",
-    "to": "now"
+    "from": "2026-04-02T20:27:42.850Z",
+    "to": "2026-04-02T20:36:39.670Z"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "LLM Data Bench",
   "uid": "llm-data-bench",
-  "version": 12,
+  "version": 20,
   "weekStart": ""
 }

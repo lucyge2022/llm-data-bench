@@ -97,6 +97,10 @@ ds = StreamingDataset(local="data-output/text/mds", shuffle=True)
 
 ## 2. Run the Benchmark
 
+`benchmark.py` does the benchmarking by feeding dataset using different loaders with specified options (batch size) to run through a dummy training loop (GPT-2 forward pass for text modality and a small ResNet for image modality) with a specified few epochs, and track the GPU/VRAM CPU/RAM utils to visualize in a prometheus + grafana dashboard. 
+
+Coupled with `torch.profiler` during each training epoch as an option to offer profiling capabilities during each run. This aims to compare different dataloaders with metrics in angles such as samples feeding rate, GPU utils.
+
 ```bash
 # Single loader
 python benchmark.py --loader ray --dataset text
@@ -115,7 +119,7 @@ python benchmark.py --smoke-test
 | Flag | Default | Description |
 |---|---|---|
 | `--loader` | — | `webdataset`, `streaming`, or `ray` |
-| `--dataset` | — | `text` or `images` |
+| `--dataset` | — | `text` or `images` (images dataset is TODO) |
 | `--batch-size` | `64` | Batch size |
 | `--num-workers` | `4` | DataLoader worker processes (Ray: CPU budget) |
 | `--epochs` | `3` | Number of epochs |
@@ -180,7 +184,7 @@ sudo service grafana-server start
 ### Access from local Mac (SSH tunnel)
 
 ```bash
-ssh -N -L 3000:localhost:3000 -L 9090:localhost:9090 root@<vast-ai-ip> -p <port>
+ssh -N -L 3000:localhost:3000 -L 9090:localhost:9090 root@<remote-instance-ip> -p <port>
 ```
 
 Then open `http://localhost:3000` (admin / admin).
