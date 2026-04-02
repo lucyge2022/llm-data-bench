@@ -205,3 +205,7 @@ Panels:
 - GPU memory used (GB) over time
 - CPU utilisation % over time
 - RAM used (GB) over time
+
+A default all panel result with text (RedPajama) dataset and GPT-2 training model, with 3 dataloaders x 3 batch sizes(32/64/128) output metrics dashboard:
+
+![Benchmark Dashboard](assets/benchmark-dashboard.png)
