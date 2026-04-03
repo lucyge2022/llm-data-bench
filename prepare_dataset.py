@@ -94,9 +94,11 @@ from tqdm import tqdm
 # Config
 # ---------------------------------------------------------------------------
 
-DATASET_ID = "togethercomputer/RedPajama-Data-1T"
+TEXT_DATASET_ID = "togethercomputer/RedPajama-Data-1T"
+IMAGE_DATASET_ID = "Maysee/tiny-imagenet"
 DATASET_DIR = Path("data")
 OUTPUT_DIR = Path("data-output")
+CACHE_DIR = Path(".hf_cache")
 SHARD_SIZE = 5_000          # samples per WebDataset / MDS shard
 
 
@@ -104,31 +106,60 @@ SHARD_SIZE = 5_000          # samples per WebDataset / MDS shard
 # Step 1 — Download from HuggingFace
 # ---------------------------------------------------------------------------
 
-def download_dataset():
+def load_text_dataset():
+    from datasets import load_dataset
+    print(f"\n{'='*60}")
+    print(f"  Step 1: Loading {TEXT_DATASET_ID} for text modality")
+    print(f"{'='*60}")
+
+    t0 = time.time()
+    ds = load_dataset(f"{DATASET_DIR.resolve()}", split='train', cache_dir=str(CACHE_DIR))
+
+    print(f"  Loaded {len(ds):,} samples in {time.time()-t0:.1f}s")
+    print(f"  Columns: {ds.column_names}") # ['text', 'meta']
+    print(f"  {ds}")
+    ds_data = ds[0]
+
+    print(f"  Sample record 0 info: type:{type(ds[0])} ds[0].keys:{ds[0].keys()}")
+    print(f"  Sample record 0 ds[0].keys():{ds_data.keys()}")
+
+    print(f"  Sample record 0 len(ds[0]['text']): {len(ds_data['text'])}")
+    print(f"  Sample record 0 ds[0]['meta']: {ds_data['meta']}")
+    return ds
+
+def load_image_dataset():
+    from datasets import load_dataset
+    print(f"\n{'='*60}")
+    print(f"  Step 1: Loading {IMAGE_DATASET_ID}")
+    print(f"{'='*60}")
+
+    t0 = time.time()
+    ds = load_dataset(IMAGE_DATASET_ID, split='train', cache_dir=str(CACHE_DIR))
+
+    print(f"  Loaded {len(ds):,} samples in {time.time()-t0:.1f}s")
+    print(f"  Columns: {ds.column_names}") # ['image', 'label']
+    print(f"  {ds}")
+    ds_data = ds[0]
+
+    print(f"  Sample record 0 info: type:{type(ds[0])} ds[0].keys:{ds[0].keys()}")
+    print(f"  Sample record 0 ds[0].keys():{ds_data.keys()}")
+
+    print(f"  Sample record 0 type(ds[0]['image']): {type(ds_data['image'])}")
+    print(f"  Sample record 0 ds[0]['label']: {ds_data['label']}")
+    return ds
+
+def download_dataset(modality: str = "text"):
     """
     Load the dataset from HuggingFace (uses local cache if already downloaded).
     Returns a HuggingFace Dataset object.
     """
-    from datasets import load_dataset
 
-    print(f"\n{'='*60}")
-    print(f"  Step 1: Loading {DATASET_ID}")
-    print(f"{'='*60}")
-
-    t0 = time.time()
-    ds = load_dataset(f"{DATASET_DIR.resolve()}")
-
-    print(f"  Loaded {len(ds):,} samples in {time.time()-t0:.1f}s")
-    print(f"  Columns: {ds.column_names}")
-    print(f"  {ds['train']}")
-    ds_data = ds['train'][0]
-
-    print(f"  Sample record 0 info: type:{type(ds['train'][0])} ds[0].keys:{ds['train'][0].keys()}")
-    print(f"  Sample record 0 ds['train'][0].keys():{ds_data.keys()}")
-
-    print(f"  Sample record 0 len(ds['train'][0]['text']): {len(ds_data['text'])}")
-    print(f"  Sample record 0 ds['train'][0]['meta']: {ds_data['meta']}")
-    return ds['train']
+    if modality == "text":
+        return load_text_dataset()
+    elif modality == "images":
+        return load_image_dataset()
+    else:
+        raise ValueError(f"Invalid modality: {modality}")
 
 
 # ---------------------------------------------------------------------------
@@ -176,17 +207,21 @@ def save_parquet(ds, output_dir: Path, modality: str = "text", shard_size: int =
 
 def save_webdataset(ds, output_dir: Path, modality: str = "text", shard_size: int = SHARD_SIZE):
     """
-    Convert dataset to WebDataset .tar shards.
+    Convert dataset to WebDataset .tar shards using wds.ShardWriter.
 
     Each sample in the tar contains:
-      {key}.txt   — the text content
-      {key}.json  — the meta dict + __id__
+      {key}.txt  / {key}.jpg  — the text or image content
+      {key}.json              — the meta dict + __id__
 
     WebDataset reads these as:
-      batch["__key__"]  → shard_id/sample_id  (used for shuffle tracking)
-      batch["txt"]      → text bytes
+      batch["__key__"]  → sample index string
+      batch["txt"]      → text bytes   (text modality)
+      batch["jpg"]      → jpeg bytes   (images modality)
       batch["json"]     → meta bytes
     """
+    import webdataset as wds
+    import io as _io
+
     out = output_dir / modality / "webdataset"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -195,51 +230,40 @@ def save_webdataset(ds, output_dir: Path, modality: str = "text", shard_size: in
     print(f"  Shard size: {shard_size:,} samples/shard")
     print(f"{'='*60}")
 
-    n = len(ds)
-    n_shards = max(1, (n + shard_size - 1) // shard_size)
-    shard_idx = 0
-    sample_idx = 0
+    shard_pattern = str(out / "shard-%06d.tar")
 
-    with tqdm(total=n, unit="samples", desc="  Writing") as pbar:
-        for shard_start in range(0, n, shard_size):
-            shard_end = min(shard_start + shard_size, n)
-            fname = out / f"shard-{shard_idx:06d}.tar"
+    with wds.ShardWriter(shard_pattern, maxcount=shard_size) as sink:
+        with tqdm(total=len(ds), unit="samples", desc="  Writing") as pbar:
+            '''
+            for image: ds.column_names
+                ['image', 'label']
+            for text: ds.column_names
+                ['text', 'meta']
+            '''
+            for sample_idx, row in enumerate(ds):
+                if modality == "text": # we aren't going to use 'meta' columns for GPT-2 forward pass
+                    sample = {
+                        "__key__": f"{sample_idx:08d}",
+                        "txt":     row["text"].encode("utf-8"),
+                    }
+                else:
+                    buf = io.BytesIO()
+                    row["image"].save(buf, format="JPEG", quality=95)
+                    sample = {
+                        "__key__": f"{sample_idx:08d}",
+                        "jpg":     buf.getvalue(),
+                    }
 
-            with tarfile.open(fname, "w") as tar:
-                for i in range(shard_start, shard_end):
-                    row = ds[i]
-                    key = f"{shard_idx:06d}/{i - shard_start:06d}"
+                sink.write(sample)
+                pbar.update(1)
 
-                    # text file
-                    text_bytes = row["text"].encode("utf-8")
-                    _tar_add_bytes(tar, f"{key}.txt", text_bytes)
-
-                    # meta + __id__ as json
-                    meta = json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"]
-                    meta["__id__"] = sample_idx
-                    meta_bytes = json.dumps(meta, default=str).encode("utf-8")
-                    _tar_add_bytes(tar, f"{key}.json", meta_bytes)
-
-                    sample_idx += 1
-                    pbar.update(1)
-
-            shard_idx += 1
-
+    n_shards = len(sorted(out.glob("*.tar")))
     print(f"  Done. {n_shards} shards written to {out}")
 
-    # Write a simple manifest for easy glob loading
     manifest = sorted(str(p.name) for p in out.glob("*.tar"))
     (out / "manifest.txt").write_text("\n".join(manifest))
     print(f"  Manifest written: {out / 'manifest.txt'}")
     return out
-
-
-def _tar_add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
-    """Add a bytes buffer as a file entry to an open tarfile."""
-    buf = io.BytesIO(data)
-    info = tarfile.TarInfo(name=name)
-    info.size = len(data)
-    tar.addfile(info, buf)
 
 
 # ---------------------------------------------------------------------------
@@ -273,22 +297,34 @@ def save_mds(ds, output_dir: Path, modality: str = "text", shard_size: int = SHA
         print("  Skipping MDS conversion.")
         return None
 
-    columns = {
-        "__id__": "int",
-        "text": "str",
-        "meta": "str",
-    }
+    columns = {}
+    if modality == "text":
+        columns = {
+            "__id__": "int",
+            "text": "str",
+            "meta": "str",
+        }
+    else:
+        columns = {
+            "__id__": "int",
+            "image": "bytes",
+            "label": "int",
+        }
 
     with MDSWriter(out=str(out), columns=columns, size_limit=shard_size * 2048) as writer:
         for i, row in enumerate(tqdm(ds, desc="  Writing", unit="samples")):
-            meta = row["meta"] if isinstance(row["meta"], str) else json.dumps(row["meta"], default=str)
-            writer.write({
-                "__id__": i,
-                "text": row["text"],
-                "meta": meta,
-                "red_pajama_subset": row.get("red_pajama_subset", ""),
-            })
-
+            if modality == "text":
+                writer.write({
+                    "__id__": i,
+                    "text": row["text"],
+                    "meta": row["meta"],
+                })
+            else:
+                writer.write({
+                    "__id__": i,
+                    "image": row["image"].tobytes(),
+                    "label": row["label"],
+                })
     shards = list(out.glob("*.mds"))
     print(f"  Done. {len(shards)} shards written to {out}")
     return out
@@ -397,7 +433,7 @@ def main():
     print(f"Modality   : {args.modality}")
 
     # 1. Load downloaded dataset
-    ds = download_dataset()
+    ds = download_dataset(modality=args.modality)
 
     # 2. Convert to requested formats
     if "parquet" in args.formats:

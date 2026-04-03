@@ -404,7 +404,7 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
             wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
             .shuffle(1000)
             .decode()
-            .to_tuple("txt", "json")
+            .to_tuple("txt")
             .batched(batch_size, partial=True)
         )
     else:  # images
@@ -413,7 +413,7 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
             wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
             .shuffle(500)
             .decode("rgb8")
-            .to_tuple("jpg", "json")
+            .to_tuple("jpg")
             .batched(batch_size, partial=True)
         )
 
