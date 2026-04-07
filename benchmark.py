@@ -61,6 +61,7 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
+import numpy as np
 from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
@@ -308,12 +309,11 @@ def text_forward(model: nn.Module, batch, device: torch.device) -> int:
 
 
 @torch.no_grad()
-def image_forward(model: nn.Module, batch, device: torch.device) -> int:
+def image_forward(model: nn.Module, images, device: torch.device) -> int:
     """
     Decode image batch and run ResNet-18 forward.
     Returns number of samples processed.
     """
-    images = _extract_images(batch, device)
     if images is None or images.shape[0] == 0:
         return 0
     model(images)
@@ -347,7 +347,6 @@ def _extract_text(batch) -> list:
                 return [str(v) for v in val.tolist()]
     return []
 
-
 def _extract_images(batch, device: torch.device) -> Optional[torch.Tensor]:
     """Extract [B, 3, H, W] float tensor from any loader's batch format."""
     import torchvision.transforms.functional as TF
@@ -364,13 +363,21 @@ def _extract_images(batch, device: torch.device) -> Optional[torch.Tensor]:
     imgs = []
 
     if isinstance(batch, (tuple, list)):
-        # WebDataset tuple: (keys, jpg_bytes, json_bytes)
+        # WebDataset: batch is a 1-tuple containing a list[bytes] of raw JPEG
         for item in batch:
-            if isinstance(item, (list, tuple)) and isinstance(item[0], bytes):
+            if isinstance(item, (list, tuple)) and len(item) > 0 and isinstance(item[0], bytes):
                 for b in item:
-                    pil = _decode_one(b)
+                    pil = _decode_one(b) # decode each image bytes into a PIL Image object
                     if pil:
                         imgs.append(TF.to_tensor(TF.resize(pil, [224, 224])))
+                break
+            elif isinstance(item, (torch.Tensor, np.ndarray)) and item.ndim >= 3:
+                # Fallback if .decode() was applied upstream — tensor is [B, H, W, C]
+                t = ( item.float() if isinstance(item, torch.Tensor) else torch.from_numpy(item).float() ) / 255.0
+                if t.ndim == 4:       # [B, H, W, C] → split into individual images
+                    t = t.permute(0, 3, 1, 2)   # → [B, C, H, W]
+                    for i in range(t.shape[0]):
+                        imgs.append(TF.resize(t[i], [224, 224]))
                 break
     elif isinstance(batch, dict):
         # Ray Data / MosaicML
@@ -412,7 +419,10 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
         ds = (
             wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
             .shuffle(500)
-            .decode("rgb8")
+            .decode('rgb8')
+            # -> this will turn the output into a tensor of shape [B, 3, H, W] B is the batch size, 3 is the number of channels, H is the height, W is the width
+            # No .decode() — keep raw JPEG bytes so .batched() produces list[bytes]
+            # instead of collating numpy arrays into a Tensor.
             .to_tuple("jpg")
             .batched(batch_size, partial=True)
         )
@@ -488,17 +498,25 @@ def run_epoch(
     total_samples  = 0
     total_batches  = 0
     t_data_wait    = 0.0   # time spent waiting for next batch (stall time)
+    t_extract_images = 0.0 # time spent extracting images
 
     t_prev = time.perf_counter()
 
     def _run_loop(prof=None):
-        nonlocal total_samples, total_batches, t_data_wait, t_prev
+        nonlocal total_samples, total_batches, t_data_wait, t_prev, t_extract_images
         with tqdm(desc=f"  Epoch {epoch}", unit="batch", leave=False) as pbar:
-            for batch in loader:
+            for i, batch in enumerate(loader): # only data batch, no labels or metadata, just for simple dummy forward pass
                 t_got_batch = time.perf_counter()
                 t_data_wait += t_got_batch - t_prev
 
-                n = forward_fn(model, batch, device)
+                if dataset == "images":
+                    t_extract_images_start = time.perf_counter()
+                    images = _extract_images(batch, device)
+                    t_extract_images_end = time.perf_counter()
+                    t_extract_images += t_extract_images_end - t_extract_images_start
+                    n = forward_fn(model, images, device)
+                else:
+                    n = forward_fn(model, batch, device)
                 total_samples += n
                 total_batches += 1
 
@@ -529,6 +547,7 @@ def run_epoch(
                 active=5,       # capture only 5 batches
                 repeat=1,
             ),
+            # profile_memory=True,  uncomment to profile memory usage
         ) as prof:
             _run_loop(prof)
         prof.export_chrome_trace(str(trace_path))
@@ -542,6 +561,7 @@ def run_epoch(
 
     t_compute = t_elapsed - t_data_wait
     data_stall_pct = round(100.0 * t_data_wait / t_elapsed, 2) if t_elapsed > 0 else 0.0
+    extract_images_pct = round(100.0 * t_extract_images / t_elapsed, 2) if t_elapsed > 0 else 0.0
 
     return {
         "epoch":           epoch,
@@ -550,6 +570,7 @@ def run_epoch(
         "elapsed_sec":     round(t_elapsed, 3),
         "samples_per_sec": round(total_samples / t_elapsed, 2) if t_elapsed > 0 else 0,
         "data_stall_pct":  data_stall_pct,
+        "extract_images_pct": extract_images_pct,
         **gpu_stats,
     }
 
@@ -636,6 +657,8 @@ def run_benchmark(
         print(f"  CPU util     : {metrics['cpu_util_pct']:.1f}%")
         print(f"  RAM used     : {metrics['ram_used_gb']:.2f} GB")
         print(f"  Data stall   : {metrics['data_stall_pct']:.1f}%")
+        if dataset == "images":
+            print(f"  Extract images: {metrics['extract_images_pct']:.1f}%")
         print(f"  Elapsed      : {metrics['elapsed_sec']:.1f}s  "
               f"({metrics['total_samples']:,} samples)")
 
@@ -708,7 +731,7 @@ def main():
 
     if args.all:
         loaders  = ["webdataset", "streaming", "ray"]
-        datasets = ["text"] #, "images"]
+        datasets = ["text", "images"]
         print(f"FULL MATRIX: {len(loaders)} loaders x {len(datasets)} datasets "
               f"x {args.epochs} epochs x 3 batch sizes")
         for loader in loaders:
