@@ -320,9 +320,11 @@ def save_mds(ds, output_dir: Path, modality: str = "text", shard_size: int = SHA
                     "meta": row["meta"],
                 })
             else:
+                buf = io.BytesIO()
+                row["image"].save(buf, format="JPEG", quality=95)
                 writer.write({
                     "__id__": i,
-                    "image": row["image"].tobytes(),
+                    "image": buf.getvalue(),  # proper JPEG bytes, PIL can decode
                     "label": row["label"],
                 })
     shards = list(out.glob("*.mds"))

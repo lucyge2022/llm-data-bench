@@ -347,7 +347,7 @@ def _extract_text(batch) -> list:
                 return [str(v) for v in val.tolist()]
     return []
 
-def _extract_images(batch, device: torch.device) -> Optional[torch.Tensor]:
+def _extract_images(batch, device: torch.device, metrics_data_points: Dict) -> Optional[torch.Tensor]:
     """Extract [B, 3, H, W] float tensor from any loader's batch format."""
     import torchvision.transforms.functional as TF
     from PIL import Image
@@ -362,22 +362,46 @@ def _extract_images(batch, device: torch.device) -> Optional[torch.Tensor]:
 
     imgs = []
 
+    t_decode_time = 0.0
+    t_resize_time = 0.0
+
     if isinstance(batch, (tuple, list)):
         # WebDataset: batch is a 1-tuple containing a list[bytes] of raw JPEG
         for item in batch:
             if isinstance(item, (list, tuple)) and len(item) > 0 and isinstance(item[0], bytes):
                 for b in item:
+                    t_decode_st = time.perf_counter()
                     pil = _decode_one(b) # decode each image bytes into a PIL Image object
+                    t_decode_time += time.perf_counter() - t_decode_st
                     if pil:
+                        t_resize_start = time.perf_counter()
                         imgs.append(TF.to_tensor(TF.resize(pil, [224, 224])))
+                        t_resize_time += time.perf_counter() - t_resize_start
                 break
-            elif isinstance(item, (torch.Tensor, np.ndarray)) and item.ndim >= 3:
+            elif isinstance(item, (torch.Tensor, np.ndarray)) and item.ndim >= 3: # [LUCY] with .decode() applied upstream, faster than raw bytes
                 # Fallback if .decode() was applied upstream — tensor is [B, H, W, C]
                 t = ( item.float() if isinstance(item, torch.Tensor) else torch.from_numpy(item).float() ) / 255.0
+                '''
+                item.ndim == 2   # [H, W]          — grayscale, no channel dim
+                 #  e.g. (32, 32)
+
+                item.ndim == 3   # [H, W, C]       — single image with channels
+                 #  e.g. (32, 32, 3)
+                 #             ↑
+                 #             3 = RGB (Red, Green, Blue channels)
+
+                t.ndim == 4   # [B, H, W, C]    — batch of images
+                 #  e.g. (64, 32, 32, 3)
+                 #             ↑
+                 #             3 = RGB channels, same meaning
+                '''
                 if t.ndim == 4:       # [B, H, W, C] → split into individual images
                     t = t.permute(0, 3, 1, 2)   # → [B, C, H, W]
                     for i in range(t.shape[0]):
+                        # t[i] shape: [C, H, W] = [3,64,64]
+                        t_resize_start = time.perf_counter()
                         imgs.append(TF.resize(t[i], [224, 224]))
+                        t_resize_time += time.perf_counter() - t_resize_start
                 break
     elif isinstance(batch, dict):
         # Ray Data / MosaicML
@@ -386,13 +410,15 @@ def _extract_images(batch, device: torch.device) -> Optional[torch.Tensor]:
                 val = batch[key]
                 items = val.tolist() if hasattr(val, "tolist") else list(val)
                 for item in items:
-                    pil = _decode_one(item)
+                    pil = _decode_one(item['bytes'] if isinstance(item, dict) else item)
                     if pil:
                         imgs.append(TF.to_tensor(TF.resize(pil, [224, 224])))
                 break
 
     if not imgs:
         return None
+    metrics_data_points["t_decode_time"] = t_decode_time
+    metrics_data_points["t_resize_time"] = t_resize_time
     return torch.stack(imgs).to(device)
 
 
@@ -499,11 +525,14 @@ def run_epoch(
     total_batches  = 0
     t_data_wait    = 0.0   # time spent waiting for next batch (stall time)
     t_extract_images = 0.0 # time spent extracting images
+    t_decode_time = 0.0
+    t_resize_time = 0.0
+    metrics_data_points = {}
 
     t_prev = time.perf_counter()
 
     def _run_loop(prof=None):
-        nonlocal total_samples, total_batches, t_data_wait, t_prev, t_extract_images
+        nonlocal total_samples, total_batches, t_data_wait, t_prev, t_extract_images, t_decode_time, t_resize_time
         with tqdm(desc=f"  Epoch {epoch}", unit="batch", leave=False) as pbar:
             for i, batch in enumerate(loader): # only data batch, no labels or metadata, just for simple dummy forward pass
                 t_got_batch = time.perf_counter()
@@ -511,9 +540,13 @@ def run_epoch(
 
                 if dataset == "images":
                     t_extract_images_start = time.perf_counter()
-                    images = _extract_images(batch, device)
+                    images = _extract_images(batch, device, metrics_data_points)
                     t_extract_images_end = time.perf_counter()
                     t_extract_images += t_extract_images_end - t_extract_images_start
+                    if 't_decode_time' in metrics_data_points:
+                        t_decode_time += metrics_data_points["t_decode_time"]
+                    if 't_resize_time' in metrics_data_points:
+                        t_resize_time += metrics_data_points["t_resize_time"]
                     n = forward_fn(model, images, device)
                 else:
                     n = forward_fn(model, batch, device)
@@ -562,6 +595,9 @@ def run_epoch(
     t_compute = t_elapsed - t_data_wait
     data_stall_pct = round(100.0 * t_data_wait / t_elapsed, 2) if t_elapsed > 0 else 0.0
     extract_images_pct = round(100.0 * t_extract_images / t_elapsed, 2) if t_elapsed > 0 else 0.0
+    decode_time_pct = round(100.0 * t_decode_time / t_elapsed, 2) if t_elapsed > 0 else 0.0
+    resize_time_pct = round(100.0 * t_resize_time / t_elapsed, 2) if t_elapsed > 0 else 0.0
+    print(f"[DEBUG] decode_time_pct:{decode_time_pct}, resize_time_pct:{resize_time_pct}")
 
     return {
         "epoch":           epoch,
