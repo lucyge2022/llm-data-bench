@@ -223,7 +223,11 @@
       "id": 1,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": [
+            "min",
+            "max",
+            "mean"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -320,7 +324,11 @@
       "id": 2,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": [
+            "min",
+            "max",
+            "mean"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -417,7 +425,11 @@
       "id": 5,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": [
+            "min",
+            "max",
+            "mean"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -514,7 +526,11 @@
       "id": 6,
       "options": {
         "legend": {
-          "calcs": [],
+          "calcs": [
+            "min",
+            "max",
+            "mean"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -548,13 +564,13 @@
     "list": []
   },
   "time": {
-    "from": "2026-04-02T20:27:42.850Z",
-    "to": "2026-04-02T20:36:39.670Z"
+    "from": "2026-04-08T04:59:48.017Z",
+    "to": "2026-04-08T06:15:29.096Z"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "LLM Data Bench",
   "uid": "llm-data-bench",
-  "version": 20,
+  "version": 21,
   "weekStart": ""
 }
