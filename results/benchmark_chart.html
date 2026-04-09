@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LLM Data Bench — Full Results</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #7d8590;
+    --wds: #58a6ff; --stream: #3fb950; --ray: #f78166;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', sans-serif; padding: 32px; }
+  h1 { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  h2 { font-size: 1.8rem; font-weight: 700; margin-bottom: 6px; }
+  .subtitle { color: var(--muted); font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace; margin-bottom: 24px; }
+  .legend { display: flex; gap: 20px; margin-bottom: 20px; }
+  .legend-item { display: flex; align-items: center; gap: 7px; font-size: 0.82rem; font-family: 'IBM Plex Mono', monospace; }
+  .dot { width: 12px; height: 12px; border-radius: 2px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; }
+  .tab { padding: 8px 22px; border-radius: 6px 6px 0 0; border: 1px solid var(--border); border-bottom: none;
+         font-size: 0.82rem; font-family: 'IBM Plex Mono', monospace; cursor: pointer;
+         background: var(--surface); color: var(--muted); transition: all 0.15s; }
+  .tab.active { background: var(--bg); color: var(--text); border-bottom: 1px solid var(--bg); }
+  .tab-divider { border-bottom: 1px solid var(--border); margin-bottom: 24px; margin-top: -1px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+  .card-title { font-size: 0.67rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: 12px; font-family: 'IBM Plex Mono', monospace; }
+  canvas { max-height: 180px; }
+
+  /* Table */
+  .tbl { width: 100%; border-collapse: collapse; font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; }
+  .tbl th { color: var(--muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: right; }
+  .tbl th:first-child { text-align: left; }
+  .tbl td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #21262d; }
+  .tbl td:first-child { text-align: left; color: var(--muted); }
+  .tbl tr:last-child td { border-bottom: none; }
+  .tbl .section { background: #0d1117; color: var(--muted); font-size: 0.68rem; letter-spacing: 0.08em; }
+  .cwds { color: var(--wds); } .cstr { color: var(--stream); } .cray { color: var(--ray); }
+</style>
+</head>
+<body>
+
+<h1>Dataset: Text (RedPajama) &amp; Images (Maysee/tiny-imagenet) · GPT-2 / ResNet-18 · Tesla V100</h1>
+<h2>LLM Data Pipeline Benchmark</h2>
+<p class="subtitle">AVG across 3 epochs · 3 loaders × 2 datasets × 3 batch sizes</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:var(--wds)"></div>WebDataset</div>
+  <div class="legend-item"><div class="dot" style="background:var(--stream)"></div>Streaming (MosaicML)</div>
+  <div class="legend-item"><div class="dot" style="background:var(--ray)"></div>Ray Data</div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('text', this)">Text (RedPajama)</div>
+  <div class="tab" onclick="switchTab('images', this)">Images (Maysee/tiny-imagenet)</div>
+</div>
+<div class="tab-divider"></div>
+
+<!-- TEXT PANEL -->
+<div id="panel-text" class="panel active">
+  <div class="grid3">
+    <div class="card"><div class="card-title">Samples / sec ↑</div><canvas id="t-sps"></canvas></div>
+    <div class="card"><div class="card-title">GPU Utilisation %</div><canvas id="t-gpu"></canvas></div>
+    <div class="card"><div class="card-title">Data Stall % ↓</div><canvas id="t-stall"></canvas></div>
+  </div>
+  <div class="grid3">
+    <div class="card"><div class="card-title">GPU Memory (GB)</div><canvas id="t-mem"></canvas></div>
+    <div class="card"><div class="card-title">CPU Utilisation %</div><canvas id="t-cpu"></canvas></div>
+    <div class="card"><div class="card-title">RAM Used (GB)</div><canvas id="t-ram"></canvas></div>
+  </div>
+  <div class="grid3">
+    <div class="card"><div class="card-title">Elapsed (s) ↓ lower is better</div><canvas id="t-elapsed"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Full Stats Table — Text</div>
+    <table class="tbl">
+      <tr><th>Metric</th>
+        <th class="cwds">wds-32</th><th class="cwds">wds-64</th><th class="cwds">wds-128</th>
+        <th class="cstr">str-32</th><th class="cstr">str-64</th><th class="cstr">str-128</th>
+        <th class="cray">ray-32</th><th class="cray">ray-64</th><th class="cray">ray-128</th>
+      </tr>
+      <tr><td>samples/sec</td><td class="cwds">1,642.8</td><td class="cwds">1,626.2</td><td class="cwds">1,722.2</td><td class="cstr">1,581.0</td><td class="cstr">1,610.0</td><td class="cstr">1,678.4</td><td class="cray">590.1</td><td class="cray">567.7</td><td class="cray">592.4</td></tr>
+      <tr><td>GPU util %</td><td class="cwds">85.5</td><td class="cwds">87.3</td><td class="cwds">86.4</td><td class="cstr">83.0</td><td class="cstr">86.8</td><td class="cstr">84.2</td><td class="cray">32.6</td><td class="cray">31.6</td><td class="cray">30.9</td></tr>
+      <tr><td>GPU mem GB</td><td class="cwds">1.20</td><td class="cwds">1.49</td><td class="cwds">2.13</td><td class="cstr">1.20</td><td class="cstr">1.49</td><td class="cstr">2.13</td><td class="cray">1.20</td><td class="cray">1.49</td><td class="cray">2.13</td></tr>
+      <tr><td>CPU util %</td><td class="cwds">94.3</td><td class="cwds">95.1</td><td class="cwds">96.3</td><td class="cstr">145.2</td><td class="cstr">138.4</td><td class="cstr">124.9</td><td class="cray">76.2</td><td class="cray">76.3</td><td class="cray">76.1</td></tr>
+      <tr><td>RAM used GB</td><td class="cwds">1.02</td><td class="cwds">1.03</td><td class="cwds">1.03</td><td class="cstr">0.97</td><td class="cstr">0.97</td><td class="cstr">0.98</td><td class="cray">3.73</td><td class="cray">3.70</td><td class="cray">3.82</td></tr>
+      <tr><td>Data stall %</td><td class="cwds">32.0</td><td class="cwds">28.9</td><td class="cwds">31.9</td><td class="cstr">17.5</td><td class="cstr">29.3</td><td class="cstr">47.8</td><td class="cray">64.4</td><td class="cray">65.3</td><td class="cray">65.6</td></tr>
+      <tr><td>Elapsed s</td><td class="cwds">12.4</td><td class="cwds">12.5</td><td class="cwds">11.8</td><td class="cstr">12.9</td><td class="cstr">12.7</td><td class="cstr">12.1</td><td class="cray">34.5</td><td class="cray">35.9</td><td class="cray">34.4</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- IMAGES PANEL -->
+<div id="panel-images" class="panel">
+  <div class="grid3">
+    <div class="card"><div class="card-title">Samples / sec ↑</div><canvas id="i-sps"></canvas></div>
+    <div class="card"><div class="card-title">GPU Utilisation %</div><canvas id="i-gpu"></canvas></div>
+    <div class="card"><div class="card-title">Data Stall % ↓</div><canvas id="i-stall"></canvas></div>
+  </div>
+  <div class="grid3">
+    <div class="card"><div class="card-title">GPU Memory (GB)</div><canvas id="i-mem"></canvas></div>
+    <div class="card"><div class="card-title">CPU Utilisation %</div><canvas id="i-cpu"></canvas></div>
+    <div class="card"><div class="card-title">RAM Used (GB)</div><canvas id="i-ram"></canvas></div>
+  </div>
+  <div class="grid3">
+    <div class="card"><div class="card-title">Elapsed (s) ↓ lower is better</div><canvas id="i-elapsed"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Full Stats Table — Images</div>
+    <table class="tbl">
+      <tr><th>Metric</th>
+        <th class="cwds">wds-32</th><th class="cwds">wds-64</th><th class="cwds">wds-128</th>
+        <th class="cstr">str-32</th><th class="cstr">str-64</th><th class="cstr">str-128</th>
+        <th class="cray">ray-32</th><th class="cray">ray-64</th><th class="cray">ray-128</th>
+      </tr>
+      <tr><td>samples/sec</td><td class="cwds">327.7</td><td class="cwds">425.1</td><td class="cwds">539.4</td><td class="cstr">215.0</td><td class="cstr">222.6</td><td class="cstr">254.1</td><td class="cray">262.8</td><td class="cray">261.4</td><td class="cray">268.6</td></tr>
+      <tr><td>GPU util %</td><td class="cwds">10.4</td><td class="cwds">13.1</td><td class="cwds">15.7</td><td class="cstr">6.8</td><td class="cstr">7.0</td><td class="cstr">6.8</td><td class="cray">8.4</td><td class="cray">8.1</td><td class="cray">8.2</td></tr>
+      <tr><td>GPU mem GB</td><td class="cwds">1.05</td><td class="cwds">1.38</td><td class="cwds">2.03</td><td class="cstr">1.05</td><td class="cstr">1.38</td><td class="cstr">2.03</td><td class="cray">1.05</td><td class="cray">1.38</td><td class="cray">2.03</td></tr>
+      <tr><td>CPU util %</td><td class="cwds">1885.7</td><td class="cwds">1882.1</td><td class="cwds">1897.5</td><td class="cstr">1887.3</td><td class="cstr">1888.3</td><td class="cstr">1887.1</td><td class="cray">1811.7</td><td class="cray">1812.5</td><td class="cray">1809.4</td></tr>
+      <tr><td>RAM used GB</td><td class="cwds">1.08</td><td class="cwds">1.12</td><td class="cwds">1.21</td><td class="cstr">1.14</td><td class="cstr">1.17</td><td class="cstr">1.29</td><td class="cray">2.32</td><td class="cray">2.42</td><td class="cray">2.48</td></tr>
+      <tr><td>Data stall %</td><td class="cwds">16.7</td><td class="cwds">20.6</td><td class="cwds">17.0</td><td class="cstr">5.7</td><td class="cstr">3.5</td><td class="cstr">3.6</td><td class="cray">4.5</td><td class="cray">4.1</td><td class="cray">3.9</td></tr>
+      <tr><td>Elapsed s</td><td class="cwds">305.2</td><td class="cwds">235.3</td><td class="cwds">185.6</td><td class="cstr">466.6</td><td class="cstr">450.4</td><td class="cstr">393.5</td><td class="cray">380.7</td><td class="cray">382.6</td><td class="cray">372.3</td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+const BS = ['bs=32', 'bs=64', 'bs=128'];
+const WDS = '#58a6ff', STR = '#3fb950', RAY = '#f78166';
+
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+function tightOpts(datasets, unit='') {
+  const all = datasets.flatMap(d => d.data);
+  const mn = Math.min(...all), mx = Math.max(...all);
+  const pad = (mx - mn) * 0.5 || mx * 0.08;
+  return {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.raw}${unit}` } }
+    },
+    scales: {
+      x: { ticks: { color:'#7d8590', font:{family:'IBM Plex Mono',size:10} }, grid:{color:'#21262d'} },
+      y: { min: Math.max(0, mn - pad), max: mx + pad,
+           ticks: { color:'#7d8590', font:{family:'IBM Plex Mono',size:10} }, grid:{color:'#21262d'} }
+    }
+  };
+}
+
+function grouped(id, wds, str, ray, unit='') {
+  const datasets = [
+    { label:'WebDataset', data: wds, backgroundColor: WDS, borderRadius: 3 },
+    { label:'Streaming',  data: str, backgroundColor: STR, borderRadius: 3 },
+    { label:'Ray',        data: ray, backgroundColor: RAY, borderRadius: 3 },
+  ];
+  new Chart(document.getElementById(id), {
+    type: 'bar',
+    data: { labels: BS, datasets },
+    options: tightOpts(datasets, unit)
+  });
+}
+
+// TEXT
+grouped('t-sps',   [1642.8,1626.2,1722.2], [1581.0,1610.0,1678.4], [590.1,567.7,592.4],  ' sps');
+grouped('t-gpu',   [85.5,87.3,86.4],        [83.0,86.8,84.2],        [32.6,31.6,30.9],    '%');
+grouped('t-stall', [32.0,28.9,31.9],        [17.5,29.3,47.8],        [64.4,65.3,65.6],    '%');
+grouped('t-mem',   [1.20,1.49,2.13],        [1.20,1.49,2.13],        [1.20,1.49,2.13],    ' GB');
+grouped('t-cpu',     [94.3,95.1,96.3],        [145.2,138.4,124.9],     [76.2,76.3,76.1],    '%');
+grouped('t-ram',     [1.02,1.03,1.03],        [0.97,0.97,0.98],        [3.73,3.70,3.82],    ' GB');
+grouped('t-elapsed', [12.4,12.5,11.8],        [12.9,12.7,12.1],        [34.5,35.9,34.4],    's');
+
+// IMAGES
+grouped('i-sps',   [327.7,425.1,539.4],     [215.0,222.6,254.1],     [262.8,261.4,268.6], ' sps');
+grouped('i-gpu',   [10.4,13.1,15.7],        [6.8,7.0,6.8],           [8.4,8.1,8.2],       '%');
+grouped('i-stall', [16.7,20.6,17.0],        [5.7,3.5,3.6],           [4.5,4.1,3.9],       '%');
+grouped('i-mem',   [1.05,1.38,2.03],        [1.05,1.38,2.03],        [1.05,1.38,2.03],    ' GB');
+grouped('i-cpu',     [1885.7,1882.1,1897.5],  [1887.3,1888.3,1887.1],  [1811.7,1812.5,1809.4], '%');
+grouped('i-ram',     [1.08,1.12,1.21],        [1.14,1.17,1.29],        [2.32,2.42,2.48],    ' GB');
+grouped('i-elapsed', [305.2,235.3,185.6],     [466.6,450.4,393.5],     [380.7,382.6,372.3], 's');
+</script>
+</body>
+</html>
