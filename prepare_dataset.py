@@ -96,10 +96,12 @@ from tqdm import tqdm
 
 TEXT_DATASET_ID = "togethercomputer/RedPajama-Data-1T"
 IMAGE_DATASET_ID = "Maysee/tiny-imagenet"
+CC3M_DATASET_ID = "pixparse/cc3m-wds"
 DATASET_DIR = Path("data")
 OUTPUT_DIR = Path("data-output")
 CACHE_DIR = Path(".hf_cache")
 SHARD_SIZE = 5_000          # samples per WebDataset / MDS shard
+MULTIMODAL_MAX_ROWS = 10_000
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +150,24 @@ def load_image_dataset():
     print(f"  Sample record 0 ds[0]['label']: {ds_data['label']}")
     return ds
 
+def load_image_text_dataset():
+    from datasets import load_dataset
+    print(f"\n{'='*60}")
+    print(f"  Step 1: Loading {CC3M_DATASET_ID} in streaming mode")
+    print(f"{'='*60}")
+
+    t0 = time.time()
+    ds = load_dataset(CC3M_DATASET_ID, split='train', cache_dir=str(CACHE_DIR), streaming=True)
+
+    print(f"  Loaded Dataset (Lazy) in {time.time()-t0:.1f}s")
+    print(f"  Columns: {ds.column_names}") # ['image', 'label']
+    print(f"  {ds}")
+    ds_data = next(iter(ds))
+
+    print(f"  Sample record 0 info: type:{type(ds_data)} ds[0].keys:{ds_data.keys()}")
+    print(f"  Sample record 0 ds[0].keys():{ds_data.keys()}")
+    return ds
+
 def download_dataset(modality: str = "text"):
     """
     Load the dataset from HuggingFace (uses local cache if already downloaded).
@@ -158,6 +178,8 @@ def download_dataset(modality: str = "text"):
         return load_text_dataset()
     elif modality == "images":
         return load_image_dataset()
+    elif modality == "image+text":
+        return load_image_text_dataset()
     else:
         raise ValueError(f"Invalid modality: {modality}")
 
@@ -171,6 +193,10 @@ def save_parquet(ds, output_dir: Path, modality: str = "text", shard_size: int =
     Save the dataset as local Parquet shards.
     Ray Data reads Parquet natively — just point it at this directory.
     """
+    import datasets
+    iterable_dataset = isinstance(ds, datasets.iterable_dataset.IterableDataset)
+    ds_iter = iter(ds)
+
     out = output_dir / modality / "parquet"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -178,22 +204,52 @@ def save_parquet(ds, output_dir: Path, modality: str = "text", shard_size: int =
     print(f"  Step 2: Saving Parquet → {out}")
     print(f"{'='*60}")
 
-    n = len(ds)
+    n = len(ds) if not iterable_dataset else MULTIMODAL_MAX_ROWS
     n_shards = max(1, n // shard_size)
     shard_rows = n // n_shards
 
     written = 0
+
+    def prepare_row(start, end):
+        rows = []
+        nonlocal ds_iter
+        with tqdm(total=end-start, desc="  Preparing rows") as pbar:
+            for j in range(start, end):
+                row = next(ds_iter)
+                pbar.update(1)
+                jpg = row["jpg"]
+                if isinstance(jpg, dict):           # HF image dict {"bytes": ..., "path": ...}
+                    jpg = jpg.get("bytes") or jpg.get("path")
+                if hasattr(jpg, "read"):            # file-like
+                    jpg = jpg.read()
+                if hasattr(jpg, "tobytes"):         # PIL Image
+                    buf = io.BytesIO()
+                    jpg.save(buf, format="JPEG", quality=85)
+                    jpg = buf.getvalue()
+                rows.append({
+                    "__id__" : j,
+                    "jpg" : jpg,
+                    "txt" : row["txt"]
+                    })
+        return rows
+
     for i in range(n_shards):
         start = i * shard_rows
         end = start + shard_rows if i < n_shards - 1 else n
-        shard = ds.select(range(start, end))
-
-        # Add a globally unique __id__ column for shuffle quality tracking
-        ids = list(range(start, end))
-        shard = shard.add_column("__id__", ids)
-
         fname = out / f"shard-{i:05d}-of-{n_shards:05d}.parquet"
-        shard.to_parquet(str(fname))
+        if iterable_dataset:
+            rows = prepare_row(start, end)
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            table = pa.Table.from_pylist(rows)
+            pq.write_table(table, fname)
+        else:
+            shard = ds.select(range(start, end))
+            # Add a globally unique __id__ column for shuffle quality tracking
+            ids = list(range(start, end))
+            shard = shard.add_column("__id__", ids)
+            shard.to_parquet(str(fname))
+
         written += end - start
         print(f"  [{i+1}/{n_shards}] {fname.name}  ({end-start:,} rows)")
 
@@ -219,6 +275,7 @@ def save_webdataset(ds, output_dir: Path, modality: str = "text", shard_size: in
       batch["jpg"]      → jpeg bytes   (images modality)
       batch["json"]     → meta bytes
     """
+    import datasets
     import webdataset as wds
     import io as _io
 
@@ -231,9 +288,11 @@ def save_webdataset(ds, output_dir: Path, modality: str = "text", shard_size: in
     print(f"{'='*60}")
 
     shard_pattern = str(out / "shard-%06d.tar")
+    iterable_dataset = isinstance(ds, datasets.iterable_dataset.IterableDataset)
 
     with wds.ShardWriter(shard_pattern, maxcount=shard_size) as sink:
-        with tqdm(total=len(ds), unit="samples", desc="  Writing") as pbar:
+        with tqdm(total=len(ds) if not iterable_dataset else MULTIMODAL_MAX_ROWS, \
+            unit="samples", desc="  Writing", disable=iterable_dataset) as pbar:
             '''
             for image: ds.column_names
                 ['image', 'label']
@@ -246,12 +305,22 @@ def save_webdataset(ds, output_dir: Path, modality: str = "text", shard_size: in
                         "__key__": f"{sample_idx:08d}",
                         "txt":     row["text"].encode("utf-8"),
                     }
-                else:
+                elif modality == "images":
                     buf = io.BytesIO()
                     row["image"].save(buf, format="JPEG", quality=95)
                     sample = {
                         "__key__": f"{sample_idx:08d}",
                         "jpg":     buf.getvalue(),
+                    }
+                elif modality == "image+text":
+                    if sample_idx == MULTIMODAL_MAX_ROWS:
+                        break
+                    buf = io.BytesIO()
+                    row["jpg"].save(buf, format="JPEG", quality=95)
+                    sample = {
+                        "__key__": f"{sample_idx:08d}",
+                        "jpg":     buf.getvalue(),
+                        "txt":     row["txt"],
                     }
 
                 sink.write(sample)
@@ -304,12 +373,20 @@ def save_mds(ds, output_dir: Path, modality: str = "text", shard_size: int = SHA
             "text": "str",
             "meta": "str",
         }
-    else:
+    elif modality == "images":
         columns = {
             "__id__": "int",
             "image": "bytes",
             "label": "int",
         }
+    elif modality == "image+text":
+        columns = {
+            "__id__": "int",
+            "jpg": "bytes",
+            "txt": "str",
+        }
+    else:
+        raise ValueError(f"Invalid modality: {modality}")
 
     with MDSWriter(out=str(out), columns=columns, size_limit=shard_size * 2048) as writer:
         for i, row in enumerate(tqdm(ds, desc="  Writing", unit="samples")):
@@ -319,13 +396,23 @@ def save_mds(ds, output_dir: Path, modality: str = "text", shard_size: int = SHA
                     "text": row["text"],
                     "meta": row["meta"],
                 })
-            else:
+            elif modality == "images":
                 buf = io.BytesIO()
                 row["image"].save(buf, format="JPEG", quality=95)
                 writer.write({
                     "__id__": i,
                     "image": buf.getvalue(),  # proper JPEG bytes, PIL can decode
                     "label": row["label"],
+                })
+            elif modality == "image+text":
+                if i == MULTIMODAL_MAX_ROWS:
+                    break
+                buf = io.BytesIO()
+                row["jpg"].save(buf, format="JPEG", quality=95)
+                writer.write({
+                    "__id__": i,
+                    "jpg": buf.getvalue(),
+                    "txt": row["txt"],
                 })
     shards = list(out.glob("*.mds"))
     print(f"  Done. {len(shards)} shards written to {out}")
@@ -414,7 +501,7 @@ def parse_args():
         "--modality",
         type=str,
         default="text",
-        help=f"Modality 'text' or 'images' (default: text)",
+        help=f"Modality 'text' or 'images' or 'image+text'(default: text)",
     )
     p.add_argument(
         "--shard-size",
