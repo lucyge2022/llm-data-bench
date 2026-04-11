@@ -79,6 +79,10 @@ IMAGE_PARQUET_DIR = DATA_ROOT / "images/parquet"
 IMAGE_WDS_DIR     = DATA_ROOT / "images/webdataset"
 IMAGE_MDS_DIR     = DATA_ROOT / "images/mds"
 
+IMAGE_TEXT_PARQUET_DIR = DATA_ROOT / "image+text/parquet"
+IMAGE_TEXT_WDS_DIR     = DATA_ROOT / "image+text/webdataset"
+IMAGE_TEXT_MDS_DIR     = DATA_ROOT / "image+text/mds"
+
 # ---------------------------------------------------------------------------
 # GPU utilisation poller  (background thread, nvidia-smi)
 # ---------------------------------------------------------------------------
@@ -275,6 +279,16 @@ def make_image_model(device: torch.device) -> nn.Module:
         print("  Model: fallback mini-CNN (torchvision not installed)")
         return model
 
+def make_multimodal_model(device: torch.device) -> nn.Module:
+    """Multimodal model — forward pass only, no gradient."""
+    try:
+        from transformers import CLIPModel, CLIPProcessor
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+        print(f"  Model: CLIP (ViT-Large/14)  params={sum(p.numel() for p in model.parameters())/1e6:.1f}M")
+        return model
+    except ImportError as e:
+        print(f"  Model: CLIP (ViT-Large/14) not installed: {e}")
+        raise e
 
 # ---------------------------------------------------------------------------
 # Dummy forward passes
@@ -309,15 +323,47 @@ def text_forward(model: nn.Module, batch, device: torch.device) -> int:
 
 
 @torch.no_grad()
-def image_forward(model: nn.Module, images, device: torch.device) -> int:
+def image_forward(model: nn.Module, batch, device: torch.device, metrics_data_points: Dict) -> int:
     """
     Decode image batch and run ResNet-18 forward.
     Returns number of samples processed.
-    """
+    """ 
+    t_extract_images_start = time.perf_counter()
+    images = _extract_images(batch, device, metrics_data_points)
+    t_extract_images_end = time.perf_counter()
+    metrics_data_points["t_extract_images_time"] = t_extract_images_end - t_extract_images_start
     if images is None or images.shape[0] == 0:
         return 0
     model(images)
-    return images.shape[0]
+    return len(images)
+
+
+@torch.no_grad()
+def multimodal_forward(model: nn.Module, batch, device: torch.device, metrics_data_points: Dict) -> int:
+    """
+    Decode image and text batch and run CLIP forward.
+    Returns number of samples processed.
+    """
+    from transformers import CLIPProcessor
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+    # Extract images
+    t_extract_images_start = time.perf_counter()
+    images = _extract_images(batch, device, metrics_data_points)
+    t_extract_images_end = time.perf_counter()
+    metrics_data_points["t_extract_images_time"] = t_extract_images_end - t_extract_images_start
+    print(f"[DEBUG] len images:{len(images)} type images:{type(images[0])}")
+    
+    # Extract text
+    texts = _extract_text(batch)
+    print(f"[DEBUG] len texts:{len(texts)} type texts:{type(texts[0])}")
+    
+    if images is None or images.shape[0] == 0 or \
+        texts is None or len(texts) == 0:
+        return 0
+    inputs = processor(text=texts, images=images, return_tensors="pt", padding=True).to(device)
+    model(**inputs)
+    return len(images)
 
 
 # ---------------------------------------------------------------------------
@@ -326,24 +372,24 @@ def image_forward(model: nn.Module, images, device: torch.device) -> int:
 
 def _extract_text(batch) -> list:
     """Extract list of text strings from any loader's batch format."""
-    # WebDataset: tuple of (keys, text_bytes, json_bytes)  or dict
+    # WebDataset
     if isinstance(batch, (tuple, list)):
+        # for Image+Text multimodal dataset with text list
+        if len(batch) == 2 and isinstance(batch[0], (tuple, list)):
+            return [text_str.decode() if isinstance(text_str, bytes) else text_str for text_str in batch[1]]
+        # for Text-only dataset
         for item in batch:
-            if isinstance(item, (list, tuple)) and isinstance(item[0], (str, bytes)):
+            if isinstance(item, (list, tuple)) and len(item) > 0 \
+                    and isinstance(item[0], (str, bytes)):
                 return [t.decode() if isinstance(t, bytes) else t for t in item]
         return []
-    # dict (Ray Data, MosaicML)
+    # dict (Ray Data, MosaicML streaming)
     for key in ("text", "txt", "__text__"):
         if key in batch:
             val = batch[key]
             if isinstance(val, (list, tuple)):
-                # if isinstance(val[0], bytes):
-                #     print(f"[DEBUG] type(v.decode()):{type(v.decode())}")
-                # else:
-                #     print(f"[DEBUG] type(val[0]):{type(val[0])}")
                 return [v.decode() if isinstance(v, bytes) else str(v) for v in val]
-            if hasattr(val, "tolist"): # val is numpy.ndarray type
-                # print(f"[DEBUG] type(val):{type(val)}")
+            if hasattr(val, "tolist"):  # numpy array column
                 return [str(v) for v in val.tolist()]
     return []
 
@@ -366,20 +412,29 @@ def _extract_images(batch, device: torch.device, metrics_data_points: Dict) -> O
     t_resize_time = 0.0
 
     if isinstance(batch, (tuple, list)):
-        # WebDataset: batch is a 1-tuple containing a list[bytes] of raw JPEG
+        # WebDataset batch is a tuple of per-field lists/arrays:
+        # Case 1:  image-only(.decode('rgb8') applied upstream, tensor as output):       (numpy[B,H,W,3],)
+        # Case 2:  image-only(no .decode('rgb8') applied upstream, raw bytes as output): ([bytes,...],)
+        # Case 3:  image+text:     batch is a tuple of (list_of_text_with_batch_size, list_of_images_with_batch_size)) 
         for item in batch:
-            if isinstance(item, (list, tuple)) and len(item) > 0 and isinstance(item[0], bytes):
+            # Skip text lists — strings/bytes that are captions, not image data
+            if isinstance(item, (list, tuple)) and len(item) > 0 and isinstance(item[0], str): # Case 3 with text list
+                continue
+            # Raw JPEG bytes path (no .decode() upstream)
+            if isinstance(item, (list, tuple)) and len(item) > 0 and isinstance(item[0], bytes): # Case 2 with raw bytes list or Case 3 with image list
                 for b in item:
                     t_decode_st = time.perf_counter()
-                    pil = _decode_one(b) # decode each image bytes into a PIL Image object
+                    pil = _decode_one(b)
                     t_decode_time += time.perf_counter() - t_decode_st
                     if pil:
                         t_resize_start = time.perf_counter()
                         imgs.append(TF.to_tensor(TF.resize(pil, [224, 224])))
                         t_resize_time += time.perf_counter() - t_resize_start
                 break
-            elif isinstance(item, (torch.Tensor, np.ndarray)) and item.ndim >= 3: # [LUCY] with .decode() applied upstream, faster than raw bytes
-                # Fallback if .decode() was applied upstream — tensor is [B, H, W, C]
+            # [LUCY] with .decode('rgb8') applied upstream, faster than raw bytes
+            elif isinstance(item, (torch.Tensor, np.ndarray)) and item.ndim >= 3: # Case 1 with tensor list
+                # .decode('rgb8') applied upstream means the batch is already a tensor of shape [B, H, W, C]
+                # if not, its a tensor of shape [B, C, H, W] B is the batch size, C is the number of channels, H is the height, W is the width, each number in the tensor is a num (e.g if its RGB, then its [0, 255])
                 t = ( item.float() if isinstance(item, torch.Tensor) else torch.from_numpy(item).float() ) / 255.0
                 '''
                 item.ndim == 2   # [H, W]          — grayscale, no channel dim
@@ -405,7 +460,7 @@ def _extract_images(batch, device: torch.device, metrics_data_points: Dict) -> O
                 break
     elif isinstance(batch, dict):
         # Ray Data / MosaicML
-        for key in ("jpeg_bytes", "image", "img", "pixel_values"):
+        for key in ("jpeg_bytes", "image", "img", "pixel_values", "jpg"):
             if key in batch:
                 val = batch[key]
                 items = val.tolist() if hasattr(val, "tolist") else list(val)
@@ -440,7 +495,7 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
             .to_tuple("txt")
             .batched(batch_size, partial=True)
         )
-    else:  # images
+    elif dataset == "images":
         shards = sorted(IMAGE_WDS_DIR.glob("*.tar"))
         ds = (
             wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
@@ -450,6 +505,15 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
             # No .decode() — keep raw JPEG bytes so .batched() produces list[bytes]
             # instead of collating numpy arrays into a Tensor.
             .to_tuple("jpg")
+            .batched(batch_size, partial=True)
+        )
+    elif dataset == "image+text":
+        shards = sorted(IMAGE_TEXT_WDS_DIR.glob("*.tar"))
+        ds = (
+            wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
+            .shuffle(1000)
+            # .decode('rgb8')
+            .to_tuple("jpg", "txt")
             .batched(batch_size, partial=True)
         )
 
@@ -462,7 +526,15 @@ def make_streaming_loader(dataset: str, batch_size: int, num_workers: int):
     from streaming import StreamingDataset
     from torch.utils.data import DataLoader
 
-    mds_dir = str(TEXT_MDS_DIR if dataset == "text" else IMAGE_MDS_DIR)
+    mds_dir = ""
+    if dataset == "text":
+        mds_dir = TEXT_MDS_DIR
+    elif dataset == "images":
+        mds_dir = IMAGE_MDS_DIR
+    elif dataset == "image+text":
+        mds_dir = IMAGE_TEXT_MDS_DIR
+    else:
+        raise ValueError(f"Invalid dataset: {dataset}")
 
     ds = StreamingDataset(
         local=mds_dir,
@@ -483,7 +555,16 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
         ray.init(num_cpus=max(num_workers, 2), ignore_reinit_error=True,
                  log_to_driver=False)
 
-    parquet_dir = str(TEXT_PARQUET_DIR if dataset == "text" else IMAGE_PARQUET_DIR)
+    parquet_dir = ""
+    if dataset == "text":
+        parquet_dir = TEXT_PARQUET_DIR
+    elif dataset == "images":
+        parquet_dir = IMAGE_PARQUET_DIR
+    elif dataset == "image+text":
+        parquet_dir = IMAGE_TEXT_PARQUET_DIR
+    else:
+        raise ValueError(f"Invalid dataset: {dataset}")
+
     ds = ray.data.read_parquet(parquet_dir) # type(ds) = <class 'ray.data.dataset.Dataset'>
     ds = ds.random_shuffle()
 
@@ -516,8 +597,6 @@ def run_epoch(
 ) -> Dict:
     """Run one epoch, return metrics dict."""
 
-    forward_fn = text_forward if dataset == "text" else image_forward
-
     poller.start()
     t_epoch_start = time.perf_counter()
 
@@ -538,18 +617,12 @@ def run_epoch(
                 t_got_batch = time.perf_counter()
                 t_data_wait += t_got_batch - t_prev
 
-                if dataset == "images":
-                    t_extract_images_start = time.perf_counter()
-                    images = _extract_images(batch, device, metrics_data_points)
-                    t_extract_images_end = time.perf_counter()
-                    t_extract_images += t_extract_images_end - t_extract_images_start
-                    if 't_decode_time' in metrics_data_points:
-                        t_decode_time += metrics_data_points["t_decode_time"]
-                    if 't_resize_time' in metrics_data_points:
-                        t_resize_time += metrics_data_points["t_resize_time"]
-                    n = forward_fn(model, images, device)
-                else:
-                    n = forward_fn(model, batch, device)
+                if dataset == "text":
+                    n = text_forward(model, batch, device)
+                elif dataset == "images":
+                    n = image_forward(model, batch, device, metrics_data_points) # metrics dict to record image extraction related metrics
+                elif dataset == "image+text":
+                    n = multimodal_forward(model, batch, device, metrics_data_points)
                 total_samples += n
                 total_batches += 1
 
@@ -639,7 +712,15 @@ def run_benchmark(
     print(f"  Device   : {device}  ({gpu_name})")
 
     # Build model
-    model = make_text_model(device) if dataset == "text" else make_image_model(device)
+    model = None
+    if dataset == "text":
+        model = make_text_model(device)
+    elif dataset == "images":
+        model = make_image_model(device)
+    elif dataset == "image+text":
+        model = make_multimodal_model(device)
+    else:
+        raise ValueError(f"Invalid dataset: {dataset}")
 
     # Build loader
     print(f"  Building {loader_name} loader...")
@@ -721,7 +802,7 @@ def parse_args():
                    choices=["webdataset", "streaming", "ray"],
                    help="Data loader to benchmark")
     p.add_argument("--dataset",
-                   choices=["text", "images"],
+                   choices=["text", "images", "image+text"],
                    help="Dataset to use")
     p.add_argument("--batch-size",  type=int, default=64)
     p.add_argument("--num-workers", type=int, default=4)
