@@ -566,7 +566,7 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
         raise ValueError(f"Invalid dataset: {dataset}")
 
     ds = ray.data.read_parquet(parquet_dir) # type(ds) = <class 'ray.data.dataset.Dataset'>
-    ds = ds.random_shuffle()
+    ds = ds.random_shuffle()#.materialize() # uncomment to test pre-materialized-shuffling
 
     return ds.iter_batches(
         batch_size=batch_size,
