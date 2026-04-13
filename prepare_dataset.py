@@ -390,11 +390,12 @@ def save_mds(ds, output_dir: Path, modality: str = "text", shard_size: int = SHA
 
     with MDSWriter(out=str(out), columns=columns, size_limit=shard_size * 2048) as writer:
         for i, row in enumerate(tqdm(ds, desc="  Writing", unit="samples")):
+            meta = row["meta"] if isinstance(row["meta"], str) else json.dumps(row["meta"], default=str)
             if modality == "text":
                 writer.write({
                     "__id__": i,
                     "text": row["text"],
-                    "meta": row["meta"],
+                    "meta": meta,
                 })
             elif modality == "images":
                 buf = io.BytesIO()
