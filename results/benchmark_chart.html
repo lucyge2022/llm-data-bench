@@ -59,6 +59,7 @@
   <div class="legend-item"><div class="dot" style="background:var(--stream)"></div>Streaming (MosaicML)</div>
   <div class="legend-item"><div class="dot" style="background:var(--ray)"></div>Ray Data</div>
   <div class="legend-item"><div class="dot" style="background:#d2a8ff"></div>Ray (pre-materialized shuffle) · bs=128 only</div>
+  <div class="legend-item"><div class="dot" style="background:#ffa657"></div>WDS (no decode) · bs=128 only</div>
 </div>
 
 <div class="tabs">
@@ -125,14 +126,15 @@
         <th class="cwds">wds-32</th><th class="cwds">wds-64</th><th class="cwds">wds-128</th>
         <th class="cstr">str-32</th><th class="cstr">str-64</th><th class="cstr">str-128</th>
         <th class="cray">ray-32</th><th class="cray">ray-64</th><th class="cray">ray-128</th>
+        <th style="color:#ffa657">wds-nd-128</th>
       </tr>
-      <tr><td>samples/sec</td><td class="cwds">327.7</td><td class="cwds">425.1</td><td class="cwds">539.4</td><td class="cstr">215.0</td><td class="cstr">222.6</td><td class="cstr">254.1</td><td class="cray">262.8</td><td class="cray">261.4</td><td class="cray">268.6</td></tr>
-      <tr><td>GPU util %</td><td class="cwds">10.4</td><td class="cwds">13.1</td><td class="cwds">15.7</td><td class="cstr">6.8</td><td class="cstr">7.0</td><td class="cstr">6.8</td><td class="cray">8.4</td><td class="cray">8.1</td><td class="cray">8.2</td></tr>
-      <tr><td>GPU mem GB</td><td class="cwds">1.05</td><td class="cwds">1.38</td><td class="cwds">2.03</td><td class="cstr">1.05</td><td class="cstr">1.38</td><td class="cstr">2.03</td><td class="cray">1.05</td><td class="cray">1.38</td><td class="cray">2.03</td></tr>
-      <tr><td>CPU util %</td><td class="cwds">1885.7</td><td class="cwds">1882.1</td><td class="cwds">1897.5</td><td class="cstr">1887.3</td><td class="cstr">1888.3</td><td class="cstr">1887.1</td><td class="cray">1811.7</td><td class="cray">1812.5</td><td class="cray">1809.4</td></tr>
-      <tr><td>RAM used GB</td><td class="cwds">1.08</td><td class="cwds">1.12</td><td class="cwds">1.21</td><td class="cstr">1.14</td><td class="cstr">1.17</td><td class="cstr">1.29</td><td class="cray">2.32</td><td class="cray">2.42</td><td class="cray">2.48</td></tr>
-      <tr><td>Data stall %</td><td class="cwds">16.7</td><td class="cwds">20.6</td><td class="cwds">17.0</td><td class="cstr">5.7</td><td class="cstr">3.5</td><td class="cstr">3.6</td><td class="cray">4.5</td><td class="cray">4.1</td><td class="cray">3.9</td></tr>
-      <tr><td>Elapsed s</td><td class="cwds">305.2</td><td class="cwds">235.3</td><td class="cwds">185.6</td><td class="cstr">466.6</td><td class="cstr">450.4</td><td class="cstr">393.5</td><td class="cray">380.7</td><td class="cray">382.6</td><td class="cray">372.3</td></tr>
+      <tr><td>samples/sec</td><td class="cwds">327.7</td><td class="cwds">425.1</td><td class="cwds">539.4</td><td class="cstr">215.0</td><td class="cstr">222.6</td><td class="cstr">254.1</td><td class="cray">262.8</td><td class="cray">261.4</td><td class="cray">268.6</td><td style="color:#ffa657">284.0</td></tr>
+      <tr><td>GPU util %</td><td class="cwds">10.4</td><td class="cwds">13.1</td><td class="cwds">15.7</td><td class="cstr">6.8</td><td class="cstr">7.0</td><td class="cstr">6.8</td><td class="cray">8.4</td><td class="cray">8.1</td><td class="cray">8.2</td><td style="color:#ffa657">8.3</td></tr>
+      <tr><td>GPU mem GB</td><td class="cwds">1.05</td><td class="cwds">1.38</td><td class="cwds">2.03</td><td class="cstr">1.05</td><td class="cstr">1.38</td><td class="cstr">2.03</td><td class="cray">1.05</td><td class="cray">1.38</td><td class="cray">2.03</td><td style="color:#ffa657">2.03</td></tr>
+      <tr><td>CPU util %</td><td class="cwds">1885.7</td><td class="cwds">1882.1</td><td class="cwds">1897.5</td><td class="cstr">1887.3</td><td class="cstr">1888.3</td><td class="cstr">1887.1</td><td class="cray">1811.7</td><td class="cray">1812.5</td><td class="cray">1809.4</td><td style="color:#ffa657">1907.8</td></tr>
+      <tr><td>RAM used GB</td><td class="cwds">1.08</td><td class="cwds">1.12</td><td class="cwds">1.21</td><td class="cstr">1.14</td><td class="cstr">1.17</td><td class="cstr">1.29</td><td class="cray">2.32</td><td class="cray">2.42</td><td class="cray">2.48</td><td style="color:#ffa657">1.24</td></tr>
+      <tr><td>Data stall %</td><td class="cwds">16.7</td><td class="cwds">20.6</td><td class="cwds">17.0</td><td class="cstr">5.7</td><td class="cstr">3.5</td><td class="cstr">3.6</td><td class="cray">4.5</td><td class="cray">4.1</td><td class="cray">3.9</td><td style="color:#ffa657">3.0</td></tr>
+      <tr><td>Elapsed s</td><td class="cwds">305.2</td><td class="cwds">235.3</td><td class="cwds">185.6</td><td class="cstr">466.6</td><td class="cstr">450.4</td><td class="cstr">393.5</td><td class="cray">380.7</td><td class="cray">382.6</td><td class="cray">372.3</td><td style="color:#ffa657">352.1</td></tr>
     </table>
   </div>
 </div>
@@ -200,16 +202,18 @@ function tightOpts(datasets, unit='') {
   };
 }
 
-const RAYNS = '#d2a8ff';
+const RAYNS   = '#d2a8ff';
+const WDSNODEC = '#ffa657';
 
-function grouped(id, wds, str, ray, unit='', rayns=null) {
+// extra = { data, label, color }  — optional 4th series (bs=128 only comparisons)
+function grouped(id, wds, str, ray, unit='', extra=null) {
   const datasets = [
-    { label:'WebDataset',        data: wds,   backgroundColor: WDS,   borderRadius: 3 },
-    { label:'Streaming',         data: str,   backgroundColor: STR,   borderRadius: 3 },
-    { label:'Ray',               data: ray,   backgroundColor: RAY,   borderRadius: 3 },
+    { label:'WebDataset', data: wds, backgroundColor: WDS, borderRadius: 3 },
+    { label:'Streaming',  data: str, backgroundColor: STR, borderRadius: 3 },
+    { label:'Ray',        data: ray, backgroundColor: RAY, borderRadius: 3 },
   ];
-  if (rayns) datasets.push(
-    { label:'Ray (pre-mat. shuffle)',  data: rayns, backgroundColor: RAYNS, borderRadius: 3 }
+  if (extra) datasets.push(
+    { label: extra.label, data: extra.data, backgroundColor: extra.color, borderRadius: 3 }
   );
   new Chart(document.getElementById(id), {
     type: 'bar',
@@ -218,14 +222,15 @@ function grouped(id, wds, str, ray, unit='', rayns=null) {
   });
 }
 
-// TEXT  (Ray pre-mat. shuffle: bs=128 only, null for bs=32/64)
-grouped('t-sps',     [1649.6,1628.1,1683.5], [1536.4,1588.6,1637.4], [450.0,446.6,444.0],  ' sps', [null,null,1678.1]);
-grouped('t-gpu',     [87.0,88.1,83.1],        [79.1,83.9,85.3],        [25.4,24.4,22.5],    '%',    [null,null,82.4]);
-grouped('t-stall',   [27.8,27.3,28.4],        [20.5,27.7,35.5],        [72.5,72.5,73.8],    '%',    [null,null,1.32]);
-grouped('t-mem',     [2.82,3.11,3.75],        [2.82,3.11,3.75],        [2.82,3.11,3.75],    ' GB',  [null,null,2.13]);
-grouped('t-cpu',     [96.0,96.8,94.7],        [138.2,132.6,133.6],     [69.4,69.2,65.8],    '%',    [null,null,111.2]);
-grouped('t-ram',     [1.02,1.03,1.03],        [0.97,0.98,0.98],        [3.15,3.23,3.36],    ' GB',  [null,null,4.13]);
-grouped('t-elapsed', [8.0,8.1,7.8],           [8.6,8.3,8.1],           [29.4,29.6,29.8],    's',    [null,null,7.87]);
+// TEXT  (Ray pre-mat. shuffle: bs=128 only)
+const pms = d => ({ data:[null,null,d], label:'Ray (pre-mat. shuffle)', color:RAYNS });
+grouped('t-sps',     [1649.6,1628.1,1683.5], [1536.4,1588.6,1637.4], [450.0,446.6,444.0],  ' sps', pms(1678.1));
+grouped('t-gpu',     [87.0,88.1,83.1],        [79.1,83.9,85.3],        [25.4,24.4,22.5],    '%',    pms(82.4));
+grouped('t-stall',   [27.8,27.3,28.4],        [20.5,27.7,35.5],        [72.5,72.5,73.8],    '%',    pms(1.32));
+grouped('t-mem',     [2.82,3.11,3.75],        [2.82,3.11,3.75],        [2.82,3.11,3.75],    ' GB',  pms(2.13));
+grouped('t-cpu',     [96.0,96.8,94.7],        [138.2,132.6,133.6],     [69.4,69.2,65.8],    '%',    pms(111.2));
+grouped('t-ram',     [1.02,1.03,1.03],        [0.97,0.98,0.98],        [3.15,3.23,3.36],    ' GB',  pms(4.13));
+grouped('t-elapsed', [8.0,8.1,7.8],           [8.6,8.3,8.1],           [29.4,29.6,29.8],    's',    pms(7.87));
 
 // IMAGE+TEXT (CC3M · CLIP)
 grouped('it-sps',     [22.99,31.01,37.38],   [22.60,31.26,38.30],   [22.70,31.18,37.47], ' sps');
@@ -236,14 +241,15 @@ grouped('it-cpu',     [674.4,908.0,1104.1],   [670.4,921.8,1101.1],   [616.3,834
 grouped('it-ram',     [7.29,4.37,2.98],       [7.31,4.34,2.88],       [9.39,6.48,5.00],   ' GB');
 grouped('it-elapsed', [434.9,322.7,267.5],    [444.7,321.4,260.7],    [440.6,320.8,266.8],'s');
 
-// IMAGES
-grouped('i-sps',   [327.7,425.1,539.4],     [215.0,222.6,254.1],     [262.8,261.4,268.6], ' sps');
-grouped('i-gpu',   [10.4,13.1,15.7],        [6.8,7.0,6.8],           [8.4,8.1,8.2],       '%');
-grouped('i-stall', [16.7,20.6,17.0],        [5.7,3.5,3.6],           [4.5,4.1,3.9],       '%');
-grouped('i-mem',   [1.05,1.38,2.03],        [1.05,1.38,2.03],        [1.05,1.38,2.03],    ' GB');
-grouped('i-cpu',     [1885.7,1882.1,1897.5],  [1887.3,1888.3,1887.1],  [1811.7,1812.5,1809.4], '%');
-grouped('i-ram',     [1.08,1.12,1.21],        [1.14,1.17,1.29],        [2.32,2.42,2.48],    ' GB');
-grouped('i-elapsed', [305.2,235.3,185.6],     [466.6,450.4,393.5],     [380.7,382.6,372.3], 's');
+// IMAGES  (WDS no-decode: bs=128 only)
+const nd = d => ({ data:[null,null,d], label:'WDS (no decode)', color:WDSNODEC });
+grouped('i-sps',     [327.7,425.1,539.4],     [215.0,222.6,254.1],     [262.8,261.4,268.6], ' sps', nd(284.0));
+grouped('i-gpu',     [10.4,13.1,15.7],        [6.8,7.0,6.8],           [8.4,8.1,8.2],       '%',    nd(8.3));
+grouped('i-stall',   [16.7,20.6,17.0],        [5.7,3.5,3.6],           [4.5,4.1,3.9],       '%',    nd(3.0));
+grouped('i-mem',     [1.05,1.38,2.03],        [1.05,1.38,2.03],        [1.05,1.38,2.03],    ' GB',  nd(2.03));
+grouped('i-cpu',     [1885.7,1882.1,1897.5],  [1887.3,1888.3,1887.1],  [1811.7,1812.5,1809.4], '%', nd(1907.8));
+grouped('i-ram',     [1.08,1.12,1.21],        [1.14,1.17,1.29],        [2.32,2.42,2.48],    ' GB',  nd(1.24));
+grouped('i-elapsed', [305.2,235.3,185.6],     [466.6,450.4,393.5],     [380.7,382.6,372.3], 's',    nd(352.1));
 </script>
 </body>
 </html>
