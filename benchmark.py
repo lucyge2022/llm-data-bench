@@ -394,10 +394,42 @@ def _extract_text(batch) -> list:
     return []
 
 def _extract_images(batch, device: torch.device, metrics_data_points: Dict) -> Optional[torch.Tensor]:
-    """Extract [B, 3, H, W] float tensor from any loader's batch format."""
+    """Extract [B, 3, H, W] float tensor from any loader's batch format.
+
+    Fast path (worker-decoded):
+      Workers have already decoded + resized to uint8 [3,224,224] numpy arrays.
+      DataLoader/WDS batching stacks them into [B,3,224,224].
+      We just normalise to float32 and move to device — no PIL work here.
+
+    Slow path (fallback):
+      Raw bytes or variable-size arrays — decode + resize in main process.
+      Used when num_workers=0 and no upstream .map() decode step.
+    """
     import torchvision.transforms.functional as TF
     from PIL import Image
 
+    # ── Fast path: images pre-decoded by workers into stacked [B,3,H,W] ──────
+    # WDS:       batch = (numpy [B,3,224,224], ...)  or  (tensor [B,3,224,224], ...)
+    # Streaming: batch = {"jpeg_bytes": tensor [B,3,224,224], ...}
+    # Ray:       batch = {"jpeg_bytes": numpy  [B,3,224,224], ...}
+    if isinstance(batch, (tuple, list)):
+        for item in batch:
+            if isinstance(item, (torch.Tensor, np.ndarray)) \
+                    and hasattr(item, "ndim") and item.ndim == 4 and item.shape[1] == 3:
+                t = item if isinstance(item, torch.Tensor) else torch.from_numpy(item)
+                return (t.float() / 255.0).to(device)
+    elif isinstance(batch, dict):
+        for key in ("jpeg_bytes", "image", "img", "pixel_values", "jpg"):
+            if key not in batch:
+                continue
+            val = batch[key]
+            if isinstance(val, (torch.Tensor, np.ndarray)) \
+                    and hasattr(val, "ndim") and val.ndim == 4 and val.shape[1] == 3:
+                t = val if isinstance(val, torch.Tensor) else torch.from_numpy(val)
+                return (t.float() / 255.0).to(device)
+            break  # key found but not pre-decoded — fall through to slow path
+
+    # ── Slow path: raw bytes / variable-size arrays ───────────────────────────
     def _decode_one(item):
         if isinstance(item, bytes):
             import io
@@ -478,6 +510,64 @@ def _extract_images(batch, device: torch.device, metrics_data_points: Dict) -> O
 
 
 # ---------------------------------------------------------------------------
+# Worker-safe decode helpers
+# These are top-level (not nested) so they can be pickled by DataLoader workers
+# and Ray actor processes.
+# ---------------------------------------------------------------------------
+
+def _decode_resize_bytes(raw) -> np.ndarray:
+    """Decode JPEG/PNG bytes or PIL Image → uint8 numpy [3, 224, 224] (C,H,W)."""
+    import io as _io
+    from PIL import Image as _Image
+    if isinstance(raw, _Image.Image):
+        pil = raw.convert("RGB")
+    else:
+        pil = _Image.open(_io.BytesIO(bytes(raw))).convert("RGB")
+    pil = pil.resize((224, 224), _Image.BILINEAR)
+    return np.asarray(pil, dtype=np.uint8).transpose(2, 0, 1)  # [3, 224, 224]
+
+
+def _wds_decode_sample(sample: dict) -> dict:
+    """WebDataset .map() transform — runs inside DataLoader worker processes.
+
+    Input sample["jpg"] may be:
+      • numpy [H,W,3] uint8  — produced by upstream .decode('rgb8')
+      • raw bytes            — no upstream .decode()
+    Output sample["jpg"] = uint8 numpy [3, 224, 224]
+    """
+    import torchvision.transforms.functional as _TF
+    for key in ("jpg", "jpeg", "png", "img"):
+        if key not in sample:
+            continue
+        raw = sample[key]
+        if isinstance(raw, np.ndarray):
+            # Already decoded by .decode('rgb8') → [H,W,3] uint8 numpy
+            t = torch.from_numpy(raw).permute(2, 0, 1)   # [3,H,W]
+            sample[key] = np.asarray(
+                _TF.resize(t, [224, 224]).numpy(), dtype=np.uint8
+            )
+        else:
+            # Raw JPEG bytes — decode + resize
+            sample[key] = _decode_resize_bytes(raw)
+        break
+    return sample
+
+
+def _ray_decode_row(row: dict) -> dict:
+    """Ray Data .map() transform — runs inside Ray actor pool."""
+    for key in ("jpeg_bytes", "image", "img", "jpg"):
+        if key not in row:
+            continue
+        raw = row[key]
+        if isinstance(raw, dict):           # HF Image feature dict
+            raw = raw.get("bytes") or raw.get("path")
+        if isinstance(raw, (bytes, bytearray, memoryview)):
+            row[key] = _decode_resize_bytes(raw)
+        break
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Loader factories
 # ---------------------------------------------------------------------------
 
@@ -500,10 +590,8 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
         ds = (
             wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
             .shuffle(500)
-            .decode('rgb8')
-            # -> this will turn the output into a tensor of shape [B, 3, H, W] B is the batch size, 3 is the number of channels, H is the height, W is the width
-            # No .decode() — keep raw JPEG bytes so .batched() produces list[bytes]
-            # instead of collating numpy arrays into a Tensor.
+            .decode('rgb8')           # JPEG → numpy [H,W,3] uint8  (in worker)
+            .map(_wds_decode_sample)  # resize → numpy [3,224,224]  (in worker)
             .to_tuple("jpg")
             .batched(batch_size, partial=True)
         )
@@ -512,7 +600,9 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
         ds = (
             wds.WebDataset(sorted(str(s) for s in shards), shardshuffle=True)
             .shuffle(1000)
-            # .decode('rgb8')
+            # No .decode() upstream — _wds_decode_sample handles raw bytes directly.
+            # After .map(), all images are [3,224,224] so .batched() can stack them.
+            .map(_wds_decode_sample)  # decode + resize → numpy [3,224,224]  (in worker)
             .to_tuple("jpg", "txt")
             .batched(batch_size, partial=True)
         )
@@ -522,8 +612,38 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
     return loader
 
 
+class _StreamingDecodeDataset:
+    """Wraps StreamingDataset and decodes images in __getitem__.
+
+    Because __getitem__ is called inside DataLoader worker processes
+    (when num_workers > 0), the decode+resize runs in parallel, fully
+    overlapping with the GPU forward pass on the previous batch.
+    """
+    _IMAGE_KEYS = ("jpeg_bytes", "image", "img", "jpg")
+
+    def __init__(self, mds_dir: str, **kwargs):
+        from streaming import StreamingDataset
+        self._ds = StreamingDataset(local=mds_dir, **kwargs)
+
+    # Delegate all dataset protocol methods to the inner StreamingDataset
+    def __len__(self):      return len(self._ds)
+    def __iter__(self):     return iter(self._ds)
+
+    def __getitem__(self, idx: int) -> dict:
+        sample = self._ds[idx]
+        for key in self._IMAGE_KEYS:
+            if key not in sample:
+                continue
+            raw = sample[key]
+            if isinstance(raw, bytes):
+                # Decode + resize in the worker → returns uint8 [3,224,224]
+                # DataLoader's default collate will stack these into [B,3,224,224]
+                sample[key] = _decode_resize_bytes(raw)
+            break
+        return sample
+
+
 def make_streaming_loader(dataset: str, batch_size: int, num_workers: int):
-    from streaming import StreamingDataset
     from torch.utils.data import DataLoader
 
     mds_dir = ""
@@ -536,12 +656,8 @@ def make_streaming_loader(dataset: str, batch_size: int, num_workers: int):
     else:
         raise ValueError(f"Invalid dataset: {dataset}")
 
-    ds = StreamingDataset(
-        local=mds_dir,
-        shuffle=True,
-        shuffle_algo="py1s",
-        batch_size=batch_size,
-    )
+    kwargs = dict(shuffle=True, shuffle_algo="py1s", batch_size=batch_size)
+    ds = _StreamingDecodeDataset(str(mds_dir), **kwargs)
     loader = DataLoader(ds, batch_size=batch_size, num_workers=num_workers,
                         pin_memory=True, drop_last=True)
     return loader
@@ -565,8 +681,15 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
     else:
         raise ValueError(f"Invalid dataset: {dataset}")
 
-    ds = ray.data.read_parquet(parquet_dir) # type(ds) = <class 'ray.data.dataset.Dataset'>
-    ds = ds.random_shuffle()#.materialize() # uncomment to test pre-materialized-shuffling
+    ds = ray.data.read_parquet(parquet_dir)
+
+    # Decode + resize images in Ray actor pool before shuffling/materialising.
+    # _ray_decode_row runs across Ray's parallel task pool — completely offloaded
+    # from the main training process.
+    if dataset in ("images", "image+text"):
+        ds = ds.map(_ray_decode_row)
+
+    ds = ds.random_shuffle().materialize()
 
     return ds.iter_batches(
         batch_size=batch_size,
