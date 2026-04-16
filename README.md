@@ -3,6 +3,7 @@
 Benchmarks three data loading pipelines for LLM/vision training workloads:
 **WebDataset**, **MosaicML StreamingDataset**, and **Ray Data**.
 
+live mdbook at : https://lucyge2022.github.io/llm-data-bench/index.html
 ---
 
 ## Requirements
