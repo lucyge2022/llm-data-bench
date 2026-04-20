@@ -23,6 +23,8 @@ Output
     "batches":        782,
     "total_samples":  50048,
     "data_stall_pct": 12.4,   # % of time GPU was idle waiting for data
+    "shm_used_gb":    8.3,    # mean /dev/shm usage during epoch (Ray object store)
+    "shm_peak_gb":    11.2,   # peak /dev/shm usage during epoch
     "hostname":       "...",
     "gpu_name":       "Tesla V100-SXM2-16GB",
     "timestamp":      "2026-03-26T10:00:00"
@@ -106,6 +108,7 @@ class GPUPoller:
         self._gpu_mems:      list = []
         self._cpu_utils: list = []
         self._ram_used:  list = []
+        self._shm_used:  list = []
 
         import psutil
         self._proc = psutil.Process(os.getpid())
@@ -127,6 +130,7 @@ class GPUPoller:
             self._g_mem      = Gauge("gpu_mem_gb",    "GPU memory used GB",   label_names, registry=self._prom_registry)
             self._g_cpu_util = Gauge("cpu_util_pct",  "CPU utilisation %",    label_names, registry=self._prom_registry)
             self._g_ram_used = Gauge("ram_used_gb",   "RAM used GB",          label_names, registry=self._prom_registry)
+            self._g_shm_used = Gauge("shm_used_gb",   "SHM used GB",          label_names, registry=self._prom_registry)
             self._prom_ok = True
         except ImportError:
             pass
@@ -142,21 +146,33 @@ class GPUPoller:
             # fallback: parse nvidia-smi output
             self._nvml_ok = False
 
+    @staticmethod
+    def _query_shm() -> float:
+        """Return /dev/shm used space in GB."""
+        import shutil
+        try:
+            usage = shutil.disk_usage("/dev/shm")
+            return usage.used / 1e9
+        except Exception:
+            return 0.0
+
     def _poll(self):
         while not self._stop.is_set():
             gpu_util, gpu_mem = self._query()
             cpu_util = self._proc.cpu_percent(interval=None)
             ram_used = self._proc.memory_info().rss / 1e9
+            shm_used = self._query_shm()
             if gpu_util is not None:
                 self._gpu_utils.append(gpu_util)
                 self._gpu_mems.append(gpu_mem)
             self._cpu_utils.append(cpu_util)
             self._ram_used.append(ram_used)
-            self._push(gpu_util, gpu_mem, cpu_util, ram_used)
+            self._shm_used.append(shm_used)
+            self._push(gpu_util, gpu_mem, cpu_util, ram_used, shm_used)
             time.sleep(self.interval)
 
     def _push(self, gpu_util: Optional[float], gpu_mem: Optional[float],
-              cpu_util: float, ram_used: float):
+              cpu_util: float, ram_used: float, shm_used: float):
         if not self._prom_ok:
             print(f"[ERROR] Prometheus not initialized")
             return
@@ -168,6 +184,7 @@ class GPUPoller:
             self._g_mem.labels(*label_values).set(gpu_mem if gpu_mem is not None else math.nan)
             self._g_cpu_util.labels(*label_values).set(cpu_util)
             self._g_ram_used.labels(*label_values).set(ram_used)
+            self._g_shm_used.labels(*label_values).set(shm_used)
             push_to_gateway(self._pushgateway, job="llm_data_bench", registry=self._prom_registry)
         except Exception as e:
             print(f"[ERROR] Exception in _push:{e}")
@@ -215,6 +232,7 @@ class GPUPoller:
         self._gpu_mems.clear()
         self._cpu_utils.clear()
         self._ram_used.clear()
+        self._shm_used.clear()
         self._stop.clear()
         self._thread = threading.Thread(target=self._poll, daemon=True)
         self._thread.start()
@@ -229,6 +247,7 @@ class GPUPoller:
         result = {
             "gpu_util_pct": 0.0, "gpu_mem_gb": 0.0, "gpu_util_min": 0.0,
             "cpu_util_pct": 0.0, "ram_used_gb": 0.0,
+            "shm_used_gb": 0.0, "shm_peak_gb": 0.0,
         }
         if self._gpu_utils:
             result["gpu_util_pct"] = round(statistics.mean(self._gpu_utils), 2)
@@ -238,6 +257,9 @@ class GPUPoller:
             result["cpu_util_pct"] = round(statistics.mean(self._cpu_utils), 2)
         if self._ram_used:
             result["ram_used_gb"]  = round(max(self._ram_used), 3)
+        if self._shm_used:
+            result["shm_used_gb"]  = round(statistics.mean(self._shm_used), 3)
+            result["shm_peak_gb"]  = round(max(self._shm_used), 3)
         return result
 
 
@@ -668,8 +690,11 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
     import ray.data
 
     if not ray.is_initialized():
-        ray.init(num_cpus=max(num_workers, 2), ignore_reinit_error=True,
-                 log_to_driver=False)
+        ray.init(
+            num_cpus=max(num_workers, 2),
+            ignore_reinit_error=True,
+            log_to_driver=False,
+        )
 
     parquet_dir = ""
     if dataset == "text":
@@ -681,15 +706,20 @@ def make_ray_loader(dataset: str, batch_size: int, num_workers: int):
     else:
         raise ValueError(f"Invalid dataset: {dataset}")
 
-    ds = ray.data.read_parquet(parquet_dir)
+    ds = ray.data.read_parquet(parquet_dir, parallelism=num_workers) # parallelism determines num of blocks for entire dataset
 
+    # 1. first shuffle the data
+    ds = ds.random_shuffle()         # total bytes (decompressed, in memory)
+
+    # 2. then decode the images (order of shuffle/map matters!)
     # Decode + resize images in Ray actor pool before shuffling/materialising.
     # _ray_decode_row runs across Ray's parallel task pool — completely offloaded
     # from the main training process.
     if dataset in ("images", "image+text"):
-        ds = ds.map(_ray_decode_row)
-
-    ds = ds.random_shuffle().materialize()
+        ds = ds.map(
+            _ray_decode_row,
+            compute=ray.data.TaskPoolStrategy(size=num_workers),
+            )
 
     return ds.iter_batches(
         batch_size=batch_size,
@@ -896,6 +926,8 @@ def run_benchmark(
         print(f"  GPU mem      : {metrics['gpu_mem_gb']:.2f} GB")
         print(f"  CPU util     : {metrics['cpu_util_pct']:.1f}%")
         print(f"  RAM used     : {metrics['ram_used_gb']:.2f} GB")
+        print(f"  /dev/shm     : {metrics['shm_used_gb']:.2f} GB avg  "
+              f"(peak {metrics['shm_peak_gb']:.2f} GB)")
         print(f"  Data stall   : {metrics['data_stall_pct']:.1f}%")
         if dataset == "images":
             print(f"  Extract images: {metrics['extract_images_pct']:.1f}%")
