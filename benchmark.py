@@ -564,7 +564,9 @@ def _wds_decode_sample(sample: dict) -> dict:
         raw = sample[key]
         if isinstance(raw, np.ndarray):
             # Already decoded by .decode('rgb8') → [H,W,3] uint8 numpy
-            t = torch.from_numpy(raw).permute(2, 0, 1)   # [3,H,W]
+            # .decode('rgb8') returns a read-only view; copy to make it writable
+            # before from_numpy() to avoid non-writable tensor warning.
+            t = torch.from_numpy(raw.copy()).permute(2, 0, 1)   # [3,H,W]
             sample[key] = np.asarray(
                 _TF.resize(t, [224, 224]).numpy(), dtype=np.uint8
             )
@@ -629,8 +631,11 @@ def make_webdataset_loader(dataset: str, batch_size: int, num_workers: int):
             .batched(batch_size, partial=True)
         )
 
+    # fork() after CUDA init corrupts worker CUDA context → hang.
+    # 'spawn' starts fresh interpreter processes, avoiding inherited CUDA state.
+    mp_ctx = 'spawn' if num_workers > 0 else None
     loader = wds.WebLoader(ds, batch_size=None, num_workers=num_workers,
-                           pin_memory=True)
+                           multiprocessing_context=mp_ctx)
     return loader
 
 
