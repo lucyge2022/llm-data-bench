@@ -59,14 +59,12 @@
   <div class="legend-item"><div class="dot" style="background:var(--stream)"></div>Streaming (MosaicML)</div>
   <div class="legend-item"><div class="dot" style="background:var(--ray)"></div>Ray Data</div>
   <div class="legend-item"><div class="dot" style="background:#d2a8ff"></div>Ray (pre-materialized shuffle) · bs=128 only</div>
-  <div class="legend-item"><div class="dot" style="background:#ffa657"></div>WDS (no decode) · bs=128 only</div>
 </div>
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('text', this)">Text (RedPajama)</div>
-  <div class="tab" onclick="switchTab('images', this)">Images</div>
+  <div class="tab" onclick="switchTab('images', this)">Images (w=2 parallel decode)</div>
   <div class="tab" onclick="switchTab('imagetext', this)">Image+Text (CC3M · CLIP)</div>
-  <div class="tab" onclick="switchTab('imgw2', this)">Images · w=2 Parallel Decode</div>
 </div>
 <div class="tab-divider"></div>
 
@@ -107,35 +105,44 @@
 
 <!-- IMAGES PANEL -->
 <div id="panel-images" class="panel">
+  <p class="subtitle" style="margin-bottom:16px">w=2 workers · bs=32/64/128 · avg across 3 epochs · 100k images · parallel decode in DataLoader workers vs Ray object store</p>
   <div class="grid3">
     <div class="card"><div class="card-title">Samples / sec ↑</div><canvas id="i-sps"></canvas></div>
     <div class="card"><div class="card-title">GPU Utilisation %</div><canvas id="i-gpu"></canvas></div>
     <div class="card"><div class="card-title">Data Stall % ↓</div><canvas id="i-stall"></canvas></div>
   </div>
   <div class="grid3">
-    <div class="card"><div class="card-title">GPU Memory (GB)</div><canvas id="i-mem"></canvas></div>
     <div class="card"><div class="card-title">CPU Utilisation %</div><canvas id="i-cpu"></canvas></div>
     <div class="card"><div class="card-title">RAM Used (GB)</div><canvas id="i-ram"></canvas></div>
+    <div class="card"><div class="card-title">Elapsed (s) ↓</div><canvas id="i-elapsed"></canvas></div>
   </div>
-  <div class="grid3">
-    <div class="card"><div class="card-title">Elapsed (s) ↓ lower is better</div><canvas id="i-elapsed"></canvas></div>
+  <div class="grid2">
+    <div class="card" style="border-color:#f78166aa">
+      <div class="card-title" style="color:#f78166">/dev/shm Avg Used (GB) — Ray object store pressure</div>
+      <canvas id="i-shm-avg"></canvas>
+    </div>
+    <div class="card" style="border-color:#f78166aa">
+      <div class="card-title" style="color:#f78166">/dev/shm Peak (GB)</div>
+      <canvas id="i-shm-peak"></canvas>
+    </div>
   </div>
   <div class="card">
-    <div class="card-title">Full Stats Table — Images</div>
+    <div class="card-title">Full Stats Table — Images · w=2 Parallel Decode · avg across 3 epochs</div>
     <table class="tbl">
       <tr><th>Metric</th>
         <th class="cwds">wds-32</th><th class="cwds">wds-64</th><th class="cwds">wds-128</th>
         <th class="cstr">str-32</th><th class="cstr">str-64</th><th class="cstr">str-128</th>
         <th class="cray">ray-32</th><th class="cray">ray-64</th><th class="cray">ray-128</th>
-        <th style="color:#ffa657">wds-nd-128</th>
       </tr>
-      <tr><td>samples/sec</td><td class="cwds">327.7</td><td class="cwds">425.1</td><td class="cwds">539.4</td><td class="cstr">215.0</td><td class="cstr">222.6</td><td class="cstr">254.1</td><td class="cray">262.8</td><td class="cray">261.4</td><td class="cray">268.6</td><td style="color:#ffa657">284.0</td></tr>
-      <tr><td>GPU util %</td><td class="cwds">10.4</td><td class="cwds">13.1</td><td class="cwds">15.7</td><td class="cstr">6.8</td><td class="cstr">7.0</td><td class="cstr">6.8</td><td class="cray">8.4</td><td class="cray">8.1</td><td class="cray">8.2</td><td style="color:#ffa657">8.3</td></tr>
-      <tr><td>GPU mem GB</td><td class="cwds">1.05</td><td class="cwds">1.38</td><td class="cwds">2.03</td><td class="cstr">1.05</td><td class="cstr">1.38</td><td class="cstr">2.03</td><td class="cray">1.05</td><td class="cray">1.38</td><td class="cray">2.03</td><td style="color:#ffa657">2.03</td></tr>
-      <tr><td>CPU util %</td><td class="cwds">1885.7</td><td class="cwds">1882.1</td><td class="cwds">1897.5</td><td class="cstr">1887.3</td><td class="cstr">1888.3</td><td class="cstr">1887.1</td><td class="cray">1811.7</td><td class="cray">1812.5</td><td class="cray">1809.4</td><td style="color:#ffa657">1907.8</td></tr>
-      <tr><td>RAM used GB</td><td class="cwds">1.08</td><td class="cwds">1.12</td><td class="cwds">1.21</td><td class="cstr">1.14</td><td class="cstr">1.17</td><td class="cstr">1.29</td><td class="cray">2.32</td><td class="cray">2.42</td><td class="cray">2.48</td><td style="color:#ffa657">1.24</td></tr>
-      <tr><td>Data stall %</td><td class="cwds">16.7</td><td class="cwds">20.6</td><td class="cwds">17.0</td><td class="cstr">5.7</td><td class="cstr">3.5</td><td class="cstr">3.6</td><td class="cray">4.5</td><td class="cray">4.1</td><td class="cray">3.9</td><td style="color:#ffa657">3.0</td></tr>
-      <tr><td>Elapsed s</td><td class="cwds">305.2</td><td class="cwds">235.3</td><td class="cwds">185.6</td><td class="cstr">466.6</td><td class="cstr">450.4</td><td class="cstr">393.5</td><td class="cray">380.7</td><td class="cray">382.6</td><td class="cray">372.3</td><td style="color:#ffa657">352.1</td></tr>
+      <tr><td>samples/sec</td><td class="cwds">631.62</td><td class="cwds">726.42</td><td class="cwds">922.12</td><td class="cstr">937.21</td><td class="cstr">1018.54</td><td class="cstr">1084.05</td><td class="cray">793.29</td><td class="cray">896.38</td><td class="cray">1136.59</td></tr>
+      <tr><td>GPU util %</td><td class="cwds">20.30</td><td class="cwds">21.95</td><td class="cwds">25.62</td><td class="cstr">30.42</td><td class="cstr">31.67</td><td class="cstr">32.44</td><td class="cray">23.45</td><td class="cray">26.07</td><td class="cray">34.82</td></tr>
+      <tr><td>GPU mem GB</td><td class="cwds">0.950</td><td class="cwds">1.174</td><td class="cwds">1.623</td><td class="cstr">0.950</td><td class="cstr">1.174</td><td class="cstr">1.623</td><td class="cray">0.950</td><td class="cray">1.174</td><td class="cray">1.623</td></tr>
+      <tr><td>CPU util %</td><td class="cwds">1677.02</td><td class="cwds">1259.67</td><td class="cwds">1035.64</td><td class="cstr">116.93</td><td class="cstr">115.51</td><td class="cstr">112.60</td><td class="cray">1631.70</td><td class="cray">1502.58</td><td class="cray">1283.17</td></tr>
+      <tr><td>RAM used GB</td><td class="cwds">1.082</td><td class="cwds">1.137</td><td class="cwds">1.200</td><td class="cstr">1.143</td><td class="cstr">1.203</td><td class="cstr">1.370</td><td class="cray">2.293</td><td class="cray">2.374</td><td class="cray">2.642</td></tr>
+      <tr><td>Data stall %</td><td class="cwds">52.61</td><td class="cwds">51.50</td><td class="cwds">55.74</td><td class="cstr">1.45</td><td class="cstr">0.81</td><td class="cstr">0.64</td><td class="cray">14.12</td><td class="cray">21.42</td><td class="cray">31.10</td></tr>
+      <tr><td>Elapsed s</td><td class="cwds">158.33</td><td class="cwds">137.78</td><td class="cwds">108.45</td><td class="cstr">106.73</td><td class="cstr">98.17</td><td class="cstr">92.34</td><td class="cray">126.25</td><td class="cray">111.70</td><td class="cray">88.03</td></tr>
+      <tr><td style="color:#f78166">/dev/shm avg GB</td><td class="cwds">0.010</td><td class="cwds">0.020</td><td class="cwds">0.040</td><td class="cstr">0.002</td><td class="cstr">0.004</td><td class="cstr">0.008</td><td class="cray">1.030</td><td class="cray">1.020</td><td class="cray">1.100</td></tr>
+      <tr><td style="color:#f78166">/dev/shm peak GB</td><td class="cwds">0.019</td><td class="cwds">0.039</td><td class="cwds">0.077</td><td class="cstr">0.010</td><td class="cstr">0.010</td><td class="cstr">0.019</td><td class="cray">1.163</td><td class="cray">1.163</td><td class="cray">1.297</td></tr>
     </table>
   </div>
 </div>
@@ -174,49 +181,6 @@
   </div>
 </div>
 
-<!-- IMAGES w=2 PARALLEL DECODE PANEL -->
-<div id="panel-imgw2" class="panel">
-  <p class="subtitle" style="margin-bottom:16px">bs=64 · w=2 workers · 3 epochs · 100k images · parallel Ray decode vs DataLoader decode</p>
-  <div class="grid3">
-    <div class="card"><div class="card-title">Samples / sec ↑</div><canvas id="w2-sps"></canvas></div>
-    <div class="card"><div class="card-title">GPU Utilisation %</div><canvas id="w2-gpu"></canvas></div>
-    <div class="card"><div class="card-title">Data Stall % ↓</div><canvas id="w2-stall"></canvas></div>
-  </div>
-  <div class="grid3">
-    <div class="card"><div class="card-title">CPU Utilisation %</div><canvas id="w2-cpu"></canvas></div>
-    <div class="card"><div class="card-title">RAM Used (GB)</div><canvas id="w2-ram"></canvas></div>
-    <div class="card"><div class="card-title">Elapsed (s) ↓</div><canvas id="w2-elapsed"></canvas></div>
-  </div>
-  <div class="grid2">
-    <div class="card" style="border-color:#f78166aa">
-      <div class="card-title" style="color:#f78166">/dev/shm Avg Used (GB) — Ray object store pressure</div>
-      <canvas id="w2-shm-avg"></canvas>
-    </div>
-    <div class="card" style="border-color:#f78166aa">
-      <div class="card-title" style="color:#f78166">/dev/shm Peak (GB)</div>
-      <canvas id="w2-shm-peak"></canvas>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-title">Full Stats Table — Images · w=2 Parallel Decode · bs=64 · avg across 3 epochs</div>
-    <table class="tbl">
-      <tr><th>Metric</th>
-        <th class="cwds">WebDataset</th>
-        <th class="cstr">Streaming</th>
-        <th class="cray">Ray</th>
-      </tr>
-      <tr><td>samples/sec</td><td class="cwds">886.97</td><td class="cstr">965.22</td><td class="cray">624.52</td></tr>
-      <tr><td>GPU util %</td><td class="cwds">27.25</td><td class="cstr">29.42</td><td class="cray">18.22</td></tr>
-      <tr><td>GPU mem GB</td><td class="cwds">1.174</td><td class="cstr">1.174</td><td class="cray">1.174</td></tr>
-      <tr><td>CPU util %</td><td class="cwds">110.31</td><td class="cstr">114.55</td><td class="cray">1338.57</td></tr>
-      <tr><td>RAM used GB</td><td class="cwds">1.194</td><td class="cstr">1.200</td><td class="cray">3.034</td></tr>
-      <tr><td>Data stall %</td><td class="cwds">1.34</td><td class="cstr">0.82</td><td class="cray">30.18</td></tr>
-      <tr><td>Elapsed s</td><td class="cwds">112.98</td><td class="cstr">103.74</td><td class="cray">160.27</td></tr>
-      <tr><td style="color:#f78166">/dev/shm avg GB</td><td class="cwds">0.003</td><td class="cstr">0.003</td><td class="cray">0.840</td></tr>
-      <tr><td style="color:#f78166">/dev/shm peak GB</td><td class="cwds">0.013</td><td class="cstr">0.010</td><td class="cray">0.878</td></tr>
-    </table>
-  </div>
-</div>
 
 <script>
 const BS = ['bs=32', 'bs=64', 'bs=128'];
@@ -248,7 +212,6 @@ function tightOpts(datasets, unit='') {
 }
 
 const RAYNS   = '#d2a8ff';
-const WDSNODEC = '#ffa657';
 
 // extra = { data, label, color }  — optional 4th series (bs=128 only comparisons)
 function grouped(id, wds, str, ray, unit='', extra=null) {
@@ -286,38 +249,15 @@ grouped('it-cpu',     [674.4,908.0,1104.1],   [670.4,921.8,1101.1],   [616.3,834
 grouped('it-ram',     [7.29,4.37,2.98],       [7.31,4.34,2.88],       [9.39,6.48,5.00],   ' GB');
 grouped('it-elapsed', [434.9,322.7,267.5],    [444.7,321.4,260.7],    [440.6,320.8,266.8],'s');
 
-// IMAGES w=2 PARALLEL DECODE  (epoch-by-epoch, bs=64 only)
-const EPOCHS = ['epoch 0', 'epoch 1', 'epoch 2'];
-function groupedEpochs(id, wds, str, ray, unit='') {
-  const datasets = [
-    { label:'WebDataset', data: wds, backgroundColor: WDS, borderRadius: 3 },
-    { label:'Streaming',  data: str, backgroundColor: STR, borderRadius: 3 },
-    { label:'Ray',        data: ray, backgroundColor: RAY, borderRadius: 3 },
-  ];
-  new Chart(document.getElementById(id), {
-    type: 'bar',
-    data: { labels: EPOCHS, datasets },
-    options: tightOpts(datasets, unit)
-  });
-}
-groupedEpochs('w2-sps',      [861.31,945.27,854.33],    [917.66,1011.85,966.15],  [644.75,629.45,599.35],  ' sps');
-groupedEpochs('w2-stall',    [0.84,1.28,1.90],           [0.87,0.79,0.80],          [26.28,33.68,30.58],     '%');
-groupedEpochs('w2-gpu',      [27.01,28.74,26.01],        [28.74,30.21,29.30],       [18.09,18.47,18.11],     '%');
-groupedEpochs('w2-cpu',      [111.21,110.65,109.07],     [113.36,115.40,114.88],    [1387.3,1296.21,1332.2], '%');
-groupedEpochs('w2-ram',      [1.167,1.210,1.205],        [1.197,1.201,1.201],       [2.937,3.011,3.154],     ' GB');
-groupedEpochs('w2-elapsed',  [116.10,105.79,117.05],     [108.94,98.80,103.47],     [155.1,158.87,166.85],   's');
-groupedEpochs('w2-shm-avg',  [0.003,0.003,0.003],        [0.003,0.003,0.004],       [0.764,0.878,0.878],     ' GB');
-groupedEpochs('w2-shm-peak', [0.018,0.010,0.010],        [0.010,0.010,0.010],       [0.878,0.878,0.878],     ' GB');
-
-// IMAGES  (WDS no-decode: bs=128 only)
-const nd = d => ({ data:[null,null,d], label:'WDS (no decode)', color:WDSNODEC });
-grouped('i-sps',     [327.7,425.1,539.4],     [215.0,222.6,254.1],     [262.8,261.4,268.6], ' sps', nd(284.0));
-grouped('i-gpu',     [10.4,13.1,15.7],        [6.8,7.0,6.8],           [8.4,8.1,8.2],       '%',    nd(8.3));
-grouped('i-stall',   [16.7,20.6,17.0],        [5.7,3.5,3.6],           [4.5,4.1,3.9],       '%',    nd(3.0));
-grouped('i-mem',     [1.05,1.38,2.03],        [1.05,1.38,2.03],        [1.05,1.38,2.03],    ' GB',  nd(2.03));
-grouped('i-cpu',     [1885.7,1882.1,1897.5],  [1887.3,1888.3,1887.1],  [1811.7,1812.5,1809.4], '%', nd(1907.8));
-grouped('i-ram',     [1.08,1.12,1.21],        [1.14,1.17,1.29],        [2.32,2.42,2.48],    ' GB',  nd(1.24));
-grouped('i-elapsed', [305.2,235.3,185.6],     [466.6,450.4,393.5],     [380.7,382.6,372.3], 's',    nd(352.1));
+// IMAGES w=2 PARALLEL DECODE  (bs=32/64/128, avg across 3 epochs)
+grouped('i-sps',      [631.62,726.42,922.12],    [937.21,1018.54,1084.05],  [793.29,896.38,1136.59],  ' sps');
+grouped('i-gpu',      [20.30,21.95,25.62],        [30.42,31.67,32.44],        [23.45,26.07,34.82],      '%');
+grouped('i-stall',    [52.61,51.50,55.74],         [1.45,0.81,0.64],           [14.12,21.42,31.10],      '%');
+grouped('i-cpu',      [1677.02,1259.67,1035.64],  [116.93,115.51,112.60],     [1631.70,1502.58,1283.17],'%');
+grouped('i-ram',      [1.082,1.137,1.200],         [1.143,1.203,1.370],        [2.293,2.374,2.642],      ' GB');
+grouped('i-elapsed',  [158.33,137.78,108.45],      [106.73,98.17,92.34],       [126.25,111.70,88.03],    's');
+grouped('i-shm-avg',  [0.010,0.020,0.040],         [0.002,0.004,0.008],        [1.030,1.020,1.100],      ' GB');
+grouped('i-shm-peak', [0.019,0.039,0.077],         [0.010,0.010,0.019],        [1.163,1.163,1.297],      ' GB');
 </script>
 </body>
 </html>
