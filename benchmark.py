@@ -652,7 +652,7 @@ class _StreamingDecodeDataset:
     def __iter__(self):     return iter(self._ds)
 
     def __getitem__(self, idx: int) -> dict:
-        sample = self._ds[idx]
+        sample = self._ds[idx] # directly return the idx-th sample from the StreamingDataset
         for key in self._IMAGE_KEYS:
             if key not in sample:
                 continue

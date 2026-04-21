@@ -66,6 +66,7 @@
   <div class="tab active" onclick="switchTab('text', this)">Text (RedPajama)</div>
   <div class="tab" onclick="switchTab('images', this)">Images</div>
   <div class="tab" onclick="switchTab('imagetext', this)">Image+Text (CC3M · CLIP)</div>
+  <div class="tab" onclick="switchTab('imgw2', this)">Images · w=2 Parallel Decode</div>
 </div>
 <div class="tab-divider"></div>
 
@@ -173,6 +174,50 @@
   </div>
 </div>
 
+<!-- IMAGES w=2 PARALLEL DECODE PANEL -->
+<div id="panel-imgw2" class="panel">
+  <p class="subtitle" style="margin-bottom:16px">bs=64 · w=2 workers · 3 epochs · 100k images · parallel Ray decode vs DataLoader decode</p>
+  <div class="grid3">
+    <div class="card"><div class="card-title">Samples / sec ↑</div><canvas id="w2-sps"></canvas></div>
+    <div class="card"><div class="card-title">GPU Utilisation %</div><canvas id="w2-gpu"></canvas></div>
+    <div class="card"><div class="card-title">Data Stall % ↓</div><canvas id="w2-stall"></canvas></div>
+  </div>
+  <div class="grid3">
+    <div class="card"><div class="card-title">CPU Utilisation %</div><canvas id="w2-cpu"></canvas></div>
+    <div class="card"><div class="card-title">RAM Used (GB)</div><canvas id="w2-ram"></canvas></div>
+    <div class="card"><div class="card-title">Elapsed (s) ↓</div><canvas id="w2-elapsed"></canvas></div>
+  </div>
+  <div class="grid2">
+    <div class="card" style="border-color:#f78166aa">
+      <div class="card-title" style="color:#f78166">/dev/shm Avg Used (GB) — Ray object store pressure</div>
+      <canvas id="w2-shm-avg"></canvas>
+    </div>
+    <div class="card" style="border-color:#f78166aa">
+      <div class="card-title" style="color:#f78166">/dev/shm Peak (GB)</div>
+      <canvas id="w2-shm-peak"></canvas>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Full Stats Table — Images · w=2 Parallel Decode · bs=64 · avg across 3 epochs</div>
+    <table class="tbl">
+      <tr><th>Metric</th>
+        <th class="cwds">WebDataset</th>
+        <th class="cstr">Streaming</th>
+        <th class="cray">Ray</th>
+      </tr>
+      <tr><td>samples/sec</td><td class="cwds">886.97</td><td class="cstr">965.22</td><td class="cray">624.52</td></tr>
+      <tr><td>GPU util %</td><td class="cwds">27.25</td><td class="cstr">29.42</td><td class="cray">18.22</td></tr>
+      <tr><td>GPU mem GB</td><td class="cwds">1.174</td><td class="cstr">1.174</td><td class="cray">1.174</td></tr>
+      <tr><td>CPU util %</td><td class="cwds">110.31</td><td class="cstr">114.55</td><td class="cray">1338.57</td></tr>
+      <tr><td>RAM used GB</td><td class="cwds">1.194</td><td class="cstr">1.200</td><td class="cray">3.034</td></tr>
+      <tr><td>Data stall %</td><td class="cwds">1.34</td><td class="cstr">0.82</td><td class="cray">30.18</td></tr>
+      <tr><td>Elapsed s</td><td class="cwds">112.98</td><td class="cstr">103.74</td><td class="cray">160.27</td></tr>
+      <tr><td style="color:#f78166">/dev/shm avg GB</td><td class="cwds">0.003</td><td class="cstr">0.003</td><td class="cray">0.840</td></tr>
+      <tr><td style="color:#f78166">/dev/shm peak GB</td><td class="cwds">0.013</td><td class="cstr">0.010</td><td class="cray">0.878</td></tr>
+    </table>
+  </div>
+</div>
+
 <script>
 const BS = ['bs=32', 'bs=64', 'bs=128'];
 const WDS = '#58a6ff', STR = '#3fb950', RAY = '#f78166';
@@ -240,6 +285,29 @@ grouped('it-mem',     [3.09,3.22,3.49],       [3.09,3.22,3.49],       [3.09,3.22
 grouped('it-cpu',     [674.4,908.0,1104.1],   [670.4,921.8,1101.1],   [616.3,834.6,998.4],'%');
 grouped('it-ram',     [7.29,4.37,2.98],       [7.31,4.34,2.88],       [9.39,6.48,5.00],   ' GB');
 grouped('it-elapsed', [434.9,322.7,267.5],    [444.7,321.4,260.7],    [440.6,320.8,266.8],'s');
+
+// IMAGES w=2 PARALLEL DECODE  (epoch-by-epoch, bs=64 only)
+const EPOCHS = ['epoch 0', 'epoch 1', 'epoch 2'];
+function groupedEpochs(id, wds, str, ray, unit='') {
+  const datasets = [
+    { label:'WebDataset', data: wds, backgroundColor: WDS, borderRadius: 3 },
+    { label:'Streaming',  data: str, backgroundColor: STR, borderRadius: 3 },
+    { label:'Ray',        data: ray, backgroundColor: RAY, borderRadius: 3 },
+  ];
+  new Chart(document.getElementById(id), {
+    type: 'bar',
+    data: { labels: EPOCHS, datasets },
+    options: tightOpts(datasets, unit)
+  });
+}
+groupedEpochs('w2-sps',      [861.31,945.27,854.33],    [917.66,1011.85,966.15],  [644.75,629.45,599.35],  ' sps');
+groupedEpochs('w2-stall',    [0.84,1.28,1.90],           [0.87,0.79,0.80],          [26.28,33.68,30.58],     '%');
+groupedEpochs('w2-gpu',      [27.01,28.74,26.01],        [28.74,30.21,29.30],       [18.09,18.47,18.11],     '%');
+groupedEpochs('w2-cpu',      [111.21,110.65,109.07],     [113.36,115.40,114.88],    [1387.3,1296.21,1332.2], '%');
+groupedEpochs('w2-ram',      [1.167,1.210,1.205],        [1.197,1.201,1.201],       [2.937,3.011,3.154],     ' GB');
+groupedEpochs('w2-elapsed',  [116.10,105.79,117.05],     [108.94,98.80,103.47],     [155.1,158.87,166.85],   's');
+groupedEpochs('w2-shm-avg',  [0.003,0.003,0.003],        [0.003,0.003,0.004],       [0.764,0.878,0.878],     ' GB');
+groupedEpochs('w2-shm-peak', [0.018,0.010,0.010],        [0.010,0.010,0.010],       [0.878,0.878,0.878],     ' GB');
 
 // IMAGES  (WDS no-decode: bs=128 only)
 const nd = d => ({ data:[null,null,d], label:'WDS (no decode)', color:WDSNODEC });
